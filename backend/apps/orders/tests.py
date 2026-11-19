@@ -10,8 +10,8 @@ User = get_user_model()
 class OrderModelTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="student_test",
             email="student_test@example.com",
+            full_name="Student Tester",
             password="TestPassword@123"
         )
         self.board = Board.objects.create(name="CBSE", slug="cbse")

@@ -9,8 +9,8 @@ User = get_user_model()
 class PaymentAndWebhookModelTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="student_pay",
             email="student_pay@example.com",
+            full_name="Payment Student",
             password="PayPassword@123"
         )
         self.order = Order.objects.create(

@@ -34,11 +34,15 @@ INSTALLED_APPS = [
     'corsheaders',
 
     # Project applications
+    'apps.accounts',
     'apps.catalog',
     'apps.products',
     'apps.orders',
     'apps.payments',
 ]
+
+# Custom User Model
+AUTH_USER_MODEL = 'accounts.CustomUser'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
