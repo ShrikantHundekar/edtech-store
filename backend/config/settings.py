@@ -36,6 +36,8 @@ INSTALLED_APPS = [
     # Project applications
     'apps.catalog',
     'apps.products',
+    'apps.orders',
+    'apps.payments',
 ]
 
 MIDDLEWARE = [
