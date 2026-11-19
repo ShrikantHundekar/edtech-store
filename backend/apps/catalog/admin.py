@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Board, ClassLevel, Subject, Chapter
+from .models import Board, ClassLevel, Subject, Chapter, Material
 
 
 @admin.register(Board)
@@ -31,3 +31,10 @@ class ChapterAdmin(admin.ModelAdmin):
     list_filter = ('is_free_sample', 'subject__academic_class', 'subject')
     search_fields = ('title',)
     prepopulated_fields = {'slug': ('title',)}
+
+
+@admin.register(Material)
+class MaterialAdmin(admin.ModelAdmin):
+    list_display = ('title', 'chapter', 'mime_type', 'file_size_bytes', 'created_at')
+    list_filter = ('mime_type', 'chapter__subject')
+    search_fields = ('title', 'file_path')

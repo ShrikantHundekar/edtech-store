@@ -1,7 +1,7 @@
 from django.test import TestCase
 from django.db import transaction
 from django.db.utils import IntegrityError
-from .models import Board, ClassLevel, Subject, Chapter
+from .models import Board, ClassLevel, Subject, Chapter, Material
 
 
 class CatalogModelTests(TestCase):
@@ -28,12 +28,26 @@ class CatalogModelTests(TestCase):
             slug="real-numbers",
             is_free_sample=True
         )
+        self.material = Material.objects.create(
+            chapter=self.chapter,
+            title="Real Numbers Revision Notes",
+            file_path="protected_media/notes/cbse_10_math_ch1.pdf",
+            file_size_bytes=1048576,
+            mime_type="application/pdf"
+        )
 
     def test_model_creation_and_string_representations(self):
         self.assertEqual(str(self.board), "CBSE")
         self.assertEqual(str(self.academic_class), "CBSE - Class 10")
         self.assertEqual(str(self.subject), "CBSE - Class 10 - Mathematics")
         self.assertEqual(str(self.chapter), "Mathematics - Ch 1: Real Numbers")
+        self.assertEqual(str(self.material), "Real Numbers - Real Numbers Revision Notes")
+
+    def test_material_attributes_and_relationships(self):
+        self.assertEqual(self.material.chapter, self.chapter)
+        self.assertEqual(self.material.mime_type, "application/pdf")
+        self.assertEqual(self.material.file_size_bytes, 1048576)
+        self.assertIn("protected_media", self.material.file_path)
 
     def test_unique_constraints(self):
         # Duplicate board slug should raise error

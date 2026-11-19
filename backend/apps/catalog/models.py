@@ -110,3 +110,35 @@ class Chapter(models.Model):
 
     def __str__(self):
         return f"{self.subject.name} - Ch {self.chapter_number}: {self.title}"
+
+
+class Material(models.Model):
+    """
+    Represents protected educational study notes (typically PDF files)
+    associated with a chapter. Stored in a private, non-public directory.
+    """
+    chapter = models.ForeignKey(
+        Chapter,
+        on_delete=models.CASCADE,
+        related_name='materials',
+        help_text="Chapter this study material belongs to"
+    )
+    title = models.CharField(max_length=200, help_text="Material title, e.g., Formula Sheet & Notes")
+    file_path = models.CharField(
+        max_length=500,
+        help_text="Internal protected file system path. Never exposed directly as a public URL."
+    )
+    file_size_bytes = models.BigIntegerField(default=0, help_text="File size in bytes")
+    mime_type = models.CharField(max_length=50, default='application/pdf', help_text="MIME type, e.g. application/pdf")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'materials'
+        ordering = ['chapter', 'title']
+        verbose_name = 'Study Material'
+        verbose_name_plural = 'Study Materials'
+
+    def __str__(self):
+        return f"{self.chapter.title} - {self.title}"
+

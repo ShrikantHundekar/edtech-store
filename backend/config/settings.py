@@ -117,6 +117,9 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Protected Media - Private storage for sensitive PDF notes (never exposed via URL)
+PROTECTED_MEDIA_ROOT = BASE_DIR / 'protected_media'
+
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
