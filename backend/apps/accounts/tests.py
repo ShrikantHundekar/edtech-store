@@ -25,6 +25,19 @@ class CustomUserModelTests(TestCase):
         self.assertTrue(user.check_password("StrongPassword123!"))
         self.assertEqual(str(user), "Aarav Sharma <student@example.com> (STUDENT)")
 
+    def test_argon2_password_hashing(self):
+        user = User.objects.create_user(
+            email="argon2user@example.com",
+            password="MySecretPassword999!",
+            full_name="Argon2 Tester"
+        )
+        # Verify hash algorithm identifier in password field starts with 'argon2'
+        self.assertTrue(user.password.startswith("argon2"))
+        self.assertIn("argon2id", user.password)
+        # Verify authentication verification
+        self.assertTrue(user.check_password("MySecretPassword999!"))
+        self.assertFalse(user.check_password("WrongPassword!"))
+
     def test_create_admin_superuser(self):
         admin_user = User.objects.create_superuser(
             email="admin@example.com",
