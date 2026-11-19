@@ -1,0 +1,336 @@
+ED-TECH STORE – ASSESSMENT-BASED DEVELOPMENT PLAN
+
+Source: Intern Assessment: Ed-Tech App (6-page PDF, dated October 30,
+2026)
+
+PROJECT OVERVIEW
+
+Build a full-stack educational digital store where students browse study
+materials and purchase access per chapter, per subject, through monthly
+or annual class passes, or through custom bundles. Payments are
+processed through Razorpay. Access is granted only after the backend
+verifies payment.
+
+The catalogue hierarchy is: Board -> Class -> Subject -> Chapter ->
+Study Material
+
+The assessment evaluates end-to-end product engineering: data model,
+API, UI, payment correctness, failure handling, security and tests.
+
+Ground rules from the assessment: - Work independently. Documentation,
+libraries and AI tools are allowed, but the candidate must be able to
+explain the code. - Use Razorpay Test Mode only. - Never put live keys,
+real card numbers or a real UPI ID in the project. - Keep secrets out of
+Git. Commit .env.example, not .env. - A smaller working application is
+better than a large unfinished one.
+
+1. PRODUCTS AND BUSINESS RULES
+
+Product types: 1. Chapter notes: every item in one chapter; lifetime
+access; example price INR 49. 2. Subject pack: every chapter in one
+subject, including chapters added later; lifetime access; example price
+INR 499. 3. Monthly pass: everything in one class; 30 days; example
+price INR 299. 4. Annual pass: everything in one class; 365 days;
+example price INR 2,499. 5. Bundle: hand-picked chapters or subjects;
+lifetime access; price set by admin. 6. Free sample: one chapter per
+subject marked free; lifetime access, sign-in required; price INR 0.
+
+Prices are examples. Admin sets actual prices.
+
+Required business rules: - Overlapping purchases: a student who owns a
+subject pack must not be offered a chapter inside that pack. An active
+class pass unlocks everything in that class. - Upgrades: when a student
+owns some chapters in a subject, reduce the subject pack price by what
+the student already paid for those chapters. The final price cannot go
+below zero. - Time-bound access: monthly and annual access ends at
+expiry. If a student buys again before expiry, extend from the old
+expiry date. - Coupons: support flat or percentage discounts, expiry
+dates and usage limits. - GST: display prices inclusive of 18% GST and
+show the GST split on the invoice.
+
+2. FUNCTIONAL REQUIREMENTS
+
+STUDENT FEATURES - S1 [MUST]: Sign up and log in using email/password,
+or mobile OTP with mocked SMS. - S2 [MUST]: Browse by board, class,
+subject and chapter; search by name. - S3 [MUST]: Product page shows
+price, inclusions, access length and Owned/Upgrade state. - S4 [MUST]:
+Multi-item cart, coupon field and GST breakdown. - S5 [MUST]: Razorpay
+checkout supporting UPI, card and netbanking. - S6 [MUST]: My Library
+lists owned content and pass expiry dates. - S7 [MUST]: Read purchased
+notes in browser. Server must refuse locked content; hiding it in the UI
+is not enough. - S8 [SHOULD]: Order history with downloadable PDF or
+printable HTML invoice.
+
+ADMIN FEATURES - A1 [MUST]: Create, edit and delete boards, classes,
+subjects and chapters. - A2 [MUST]: Upload PDF notes to chapters and
+mark a chapter free. - A3 [MUST]: Create products and set prices for
+each product type. - A4 [MUST]: View all orders and payments, filtered
+by date and status. - A5 [SHOULD]: Create and disable coupons. - A6
+[SHOULD]: Manually grant or revoke student access, logging the reason. -
+A7 [SHOULD]: Dashboard showing revenue by day, top products and active
+passes.
+
+3. ACCESS CONTROL REQUIREMENTS
+
+-   Every API route checks the caller’s role.
+-   A student calling an admin route must receive HTTP 403.
+-   Notes must not have guessable or freely shareable file URLs.
+-   Serve files through an authenticated route or short-lived signed
+    URLs.
+
+4. PROPOSED TECHNOLOGY STACK
+
+The assessment permits Python with Django or FastAPI, MySQL or
+MySQL, and Django ORM or SQLAlchemy with Alembic.
+
+Recommended implementation: - Frontend: React.js + TypeScript. -
+Backend: Python + Django. - API: Django REST Framework. - Database:
+MySQL. - ORM and migrations: Django ORM and Django migrations. -
+Authentication: short-lived JWT with refresh, or secure HTTP-only
+cookies. - Password hashing: Argon2 (bcrypt is also accepted). -
+Payments: Razorpay Python SDK or REST API, Test Mode only. - File
+storage: local disk during development; S3-compatible storage can be
+considered later. - PDF delivery: authenticated Django endpoint or
+expiring signed URL. - Testing: Pytest. - API testing/manual checks:
+Postman. - Version control: Git and GitHub. - Local environment: Docker
+Compose is welcome/recommended.
+
+This is a proposed stack, not a mandatory stack specified by the
+company.
+
+5. DATABASE DESIGN
+
+The assessment requires at least these 14 tables: 1. users 2. boards 3.
+classes 4. subjects 5. chapters 6. materials 7. products 8. prices 9.
+coupons 10. orders 11. order_items 12. payments 13. webhook_events 14.
+entitlements
+
+Possible supporting models: - BundleItem, to associate chapters/subjects
+with bundles. - ManualAccessLog, to record admin access
+grants/revocations and reasons.
+
+Database decisions: - Use relational foreign-key relationships. - Store
+money as integer paise, never floating-point values. - Use real database
+migrations. - Store entitlement start/end or expiry information. -
+Prevent duplicate entitlement grants. - Preserve payment attempts and
+webhook-event history. - Access checks must read entitlements; do not
+recalculate access from historical orders on every request. - Include an
+ER diagram in README.
+
+6. DEVELOPMENT PHASES
+
+PHASE 1 – PROJECT FOUNDATION Tasks: - Create separate frontend and
+backend directories. - Set up Python virtual environment. - Install
+Django and Django REST Framework. - Configure MySQL. - Configure
+environment variables. - Create Django applications. - Configure Django
+ORM and migrations. Deliverable: Running Django backend connected to
+MySQL.
+
+PHASE 2 – AUTHENTICATION AND AUTHORIZATION Tasks: - Student
+registration. - Student login and logout. - Password hashing with Argon2
+or bcrypt. - JWT authentication with refresh, or HTTP-only cookie
+authentication. - Student and Admin roles. - Role-based API
+permissions. - Server-side request validation. - Rate limiting for login
+routes. Deliverable: Secure authentication system with separate role
+permissions.
+
+PHASE 3 – CATALOGUE MANAGEMENT Tasks: - Board CRUD. - Class CRUD. -
+Subject CRUD. - Chapter CRUD. - Catalogue listing APIs. - Search by
+name. - PDF upload to chapters. - Free sample chapter functionality.
+Deliverable: Complete catalogue and admin management APIs.
+
+PHASE 4 – PRODUCT AND PRICING ENGINE Tasks: - Implement chapter-note
+products. - Implement subject-pack products. - Implement monthly
+passes. - Implement annual passes. - Implement bundles. - Implement free
+samples. - Show product inclusions and access duration. - Detect Owned
+and Upgrade states. - Prevent overlapping purchases. - Calculate
+subject-pack upgrade credit. - Calculate pass expiry and renewal
+dates. - Validate coupons, expiry and usage limits. - Calculate
+inclusive 18% GST and tax split. Deliverable: Product/pricing engine
+with tested business rules.
+
+PHASE 5 – CART AND ORDER MANAGEMENT Tasks: - Add multiple products to
+cart. - Remove products from cart. - Apply coupons. - Calculate upgrade
+credits. - Calculate GST breakdown. - Recalculate all prices on the
+server using database prices. - Create order and order items. - Save
+order status. Deliverable: Cart and order APIs. Never trust a price sent
+by the browser.
+
+PHASE 6 – RAZORPAY PAYMENT INTEGRATION Tasks: - Configure Razorpay Test
+Mode credentials through environment variables. - Generate Razorpay
+orders on the backend. - Open Razorpay Checkout on the frontend. -
+Support UPI, card and netbanking. - Receive order ID, payment ID and
+signature from Checkout. - Verify payment signature on the server using
+HMAC-SHA256: HMAC of order_id + “|” + payment_id using the Razorpay key
+secret. - Handle payment.captured webhook. - Handle payment.failed
+webhook. - Verify X-Razorpay-Signature against the raw request body
+using the webhook secret. - Compare paid amount with saved order
+amount. - Handle pending UPI payments and settle them through webhook. -
+Prevent duplicate access grants and duplicate revenue counting. - Store
+every payment attempt and every webhook event. Deliverable: Reliable
+end-to-end test payment flow.
+
+Payment correctness rules: - Checkout verification and webhook
+processing may arrive in either order. - Either path may be delivered
+more than once. - Both paths must lead to the same idempotent
+access-grant operation. - Grant access exactly once. - Failed/cancelled
+payments grant no access and allow retry. - A webhook must be able to
+grant access even if the student closes the browser tab. - Pending UPI
+should show a waiting-for-payment state until settled.
+
+Razorpay test scenarios specified in the PDF: - Successful UPI test ID:
+success@razorpay - Failed UPI test ID: failure@razorpay - Use Razorpay’s
+published test cards for card payments. - Expose local webhook URL using
+ngrok or Cloudflare Tunnel during development. - Use test keys beginning
+with rzp_test_. Never use live keys.
+
+PHASE 7 – ENTITLEMENTS AND PROTECTED CONTENT Tasks: - Create entitlement
+records after verified payment. - Grant lifetime access for lifetime
+products. - Grant time-limited access for passes. - Extend an existing
+pass from its current expiry when renewed early. - Check entitlement
+before serving a PDF. - Deny locked or expired content at the server. -
+Support manual grants/revocations with logged reasons (Should feature).
+Deliverable: Secure and auditable content-access system.
+
+PHASE 8 – REACT FRONTEND Student interface: - Registration and login. -
+Catalogue browsing and search. - Product details. - Owned and Upgrade
+states. - Cart. - Coupon and GST breakdown. - Razorpay checkout. - My
+Library. - Pass expiry dates. - Browser PDF reader. - Order history and
+invoice (Should feature).
+
+Admin interface: - Dashboard. - Board/class/subject/chapter
+management. - PDF uploads and free-chapter setting. - Product and price
+management. - Coupon management (Should feature). - Orders and payment
+history with date/status filters. - Manual access management (Should
+feature). - Revenue by day, top products and active passes (Should
+feature).
+
+Deliverable: Frontend connected to backend APIs.
+
+PHASE 9 – AUTOMATED TESTING Mandatory tests from the assessment: - Price
+calculation: upgrade credit, coupon and GST. - Payment signature
+verification: valid signature and tampered signature. - Idempotent
+webhook handling: same event twice grants access once. - Access check
+for locked content.
+
+Additional recommended tests: - Student attempting admin API receives
+403. - Failed payment grants no access. - Incorrect payment amount
+grants no access. - Expired pass no longer grants access. - Early pass
+renewal extends from old expiry. - Coupon expiry and usage-limit checks.
+Deliverable: Automated test suite and documented test commands.
+
+PHASE 10 – FINAL SUBMISSION Tasks: - Prepare GitHub repository. - Commit
+progress in meaningful commits, not one giant commit. - Write README
+with setup instructions. - Document environment variables. - Include
+seed accounts. - Include ER diagram. - Document key design decisions. -
+Add .env.example with every required variable and no real secrets. -
+Ensure app starts locally with seed data. - Prepare screen recording of
+at most five minutes. Deliverable: Submission-ready repository and
+demonstration.
+
+7. SEED DATA AND LOCAL RUNNING
+
+The assessment requires local startup with seed data: - 1 board. - 2
+classes. - 3 subjects. - 5 chapters per subject. - One admin account. -
+One student account.
+
+Provide one command or a short list of commands in README to start the
+application locally. Docker Compose is welcome.
+
+8. SECURITY CHECKLIST
+
+-   Hash passwords using bcrypt or Argon2.
+-   Use HTTP-only cookies or short-lived JWTs with refresh.
+-   Validate every request body on the server.
+-   Rate-limit login and payment routes.
+-   Never expose Razorpay key secret or webhook secret to the browser.
+-   Verify payment signatures server-side.
+-   Verify webhook signatures using the raw request body.
+-   Check payment amount against saved order amount.
+-   Protect PDF access at the server.
+-   Enforce role-based API permissions.
+
+9. OPTIONAL FEATURES AND BONUS
+
+Should features: - Downloadable PDF or printable HTML invoices. - Admin
+coupon creation and disabling. - Manual access grants/revocations with
+reason logging. - Admin revenue dashboard. - Top-selling products. -
+Active passes statistics.
+
+Bonus recurring passes: - Monthly pass auto-renewal using Razorpay
+Subscriptions. - UPI Autopay or card mandate. - Renewal webhooks extend
+access. - Cancelled subscription retains access until the current period
+ends.
+
+Implement optional and bonus features only after all Must requirements
+work correctly.
+
+10. SUGGESTED FOUR-WEEK SCHEDULE
+
+This schedule is a development recommendation, not a deadline stated by
+the company.
+
+WEEK 1: - Project setup. - MySQL and Django configuration. -
+Authentication and roles. - Catalogue models and APIs.
+
+WEEK 2: - Products and pricing engine. - Overlap and upgrade rules. -
+Coupons and GST. - Cart and order APIs.
+
+WEEK 3: - Razorpay integration. - Payment signature verification. -
+Webhooks and idempotency. - Entitlements and protected PDF access.
+
+WEEK 4: - React student and admin interfaces. - Automated testing. -
+README and ER diagram. - Seed data and local startup. - Five-minute
+demonstration recording. - Final GitHub review.
+
+Recommended priority: complete and test backend business logic and
+payment handling before spending significant time on frontend styling.
+
+11. FIVE-MINUTE DEMONSTRATION VIDEO
+
+The assessment asks the recording to show: 1. A student buys a chapter
+using successful UPI (success@razorpay). 2. A failed UPI payment using
+failure@razorpay. 3. An upgrade to the subject pack. 4. A monthly pass
+purchase. 5. The admin orders view.
+
+Keep the recording within five minutes.
+
+12. GITHUB SUBMISSION CHECKLIST
+
+[ ] Frontend source code. [ ] Backend source code. [ ] Meaningful Git
+commit history. [ ] README setup instructions. [ ] Environment variable
+documentation. [ ] Seed account details. [ ] ER diagram. [ ] Key design
+decisions. [ ] .env.example with all variables and no real secrets. [ ]
+Automated tests. [ ] Local startup instructions. [ ] Five-minute maximum
+screen recording.
+
+13. INTERVIEW REVIEW PREPARATION
+
+The assessment says shortlisted candidates receive a 45-minute review
+call. They will walk through the code and ask for a small live change,
+such as adding a new product type or changing the upgrade rule.
+
+Be prepared to explain: - Why the database is structured this way. - How
+product types map to entitlements. - How overlapping purchases are
+prevented. - How upgrade credit is calculated. - How pass expiry and
+renewal work. - Why prices are recalculated on the backend. - How
+Razorpay signatures are verified. - Why webhooks are needed in addition
+to Checkout callbacks. - How idempotency prevents duplicate grants. -
+How locked PDFs are protected. - How automated tests cover payment and
+access rules.
+
+AI coding tools are permitted by the assessment, but you must be able to
+explain and modify your own code.
+
+14. RECOMMENDED FIRST STEP
+
+Start Phase 1: 1. Create the project root and frontend/backend
+directories. 2. Create and activate a Python virtual environment. 3.
+Install Django and Django REST Framework. 4. Configure MySQL. 5.
+Create Django apps. 6. Configure environment variables. 7. Run
+migrations and verify the backend starts.
+
+Build one phase at a time. Test each module before proceeding.
+Prioritize all Must requirements over Should and bonus features.
+
+END OF PLAN
