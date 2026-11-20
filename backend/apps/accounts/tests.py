@@ -1,6 +1,9 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.db.utils import IntegrityError
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 User = get_user_model()
 
@@ -76,3 +79,92 @@ class CustomUserModelTests(TestCase):
                 password="Password123!",
                 full_name="No Email User"
             )
+
+
+class AuthAPITests(APITestCase):
+    def setUp(self):
+        self.register_url = reverse('auth_register')
+        self.login_url = reverse('auth_login')
+        self.test_user = User.objects.create_user(
+            email="existingstudent@example.com",
+            password="SecurePassword123!",
+            full_name="Existing Student"
+        )
+
+    def test_student_registration_success(self):
+        payload = {
+            "email": "newstudent@example.com",
+            "password": "StrongPassword2026!",
+            "confirm_password": "StrongPassword2026!",
+            "full_name": "Rohan Deshmukh",
+            "phone_number": "+919988776655"
+        }
+        response = self.client.post(self.register_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn('tokens', response.data)
+        self.assertIn('access', response.data['tokens'])
+        self.assertIn('refresh', response.data['tokens'])
+        self.assertEqual(response.data['user']['email'], "newstudent@example.com")
+        self.assertEqual(response.data['user']['role'], "STUDENT")
+        self.assertTrue(response.data['user']['is_student'])
+
+    def test_registration_duplicate_email(self):
+        payload = {
+            "email": "existingstudent@example.com",
+            "password": "StrongPassword2026!",
+            "full_name": "Duplicate Tester"
+        }
+        response = self.client.post(self.register_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('email', response.data)
+
+    def test_registration_weak_password(self):
+        payload = {
+            "email": "weakpass@example.com",
+            "password": "123",
+            "full_name": "Weak Pass User"
+        }
+        response = self.client.post(self.register_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_registration_password_mismatch(self):
+        payload = {
+            "email": "mismatch@example.com",
+            "password": "ValidPassword123!",
+            "confirm_password": "DifferentPassword123!",
+            "full_name": "Mismatch Tester"
+        }
+        response = self.client.post(self.register_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('confirm_password', response.data)
+
+    def test_student_login_success(self):
+        payload = {
+            "email": "existingstudent@example.com",
+            "password": "SecurePassword123!"
+        }
+        response = self.client.post(self.login_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('tokens', response.data)
+        self.assertIn('access', response.data['tokens'])
+        self.assertIn('refresh', response.data['tokens'])
+        self.assertEqual(response.data['user']['email'], "existingstudent@example.com")
+        self.assertEqual(response.data['user']['role'], "STUDENT")
+
+    def test_login_invalid_password(self):
+        payload = {
+            "email": "existingstudent@example.com",
+            "password": "WrongPassword999!"
+        }
+        response = self.client.post(self.login_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn('error', response.data)
+
+    def test_login_nonexistent_email(self):
+        payload = {
+            "email": "notfound@example.com",
+            "password": "SomePassword123!"
+        }
+        response = self.client.post(self.login_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn('error', response.data)
