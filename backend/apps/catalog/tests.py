@@ -1,3 +1,7 @@
+import os
+import shutil
+from django.conf import settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.db import transaction
 from django.db.utils import IntegrityError
@@ -330,4 +334,135 @@ class PublicCatalogAPITests(APITestCase):
         resp_no_match = self.client.get('/api/v1/catalog/search/?q=QuantumMechanics404')
         self.assertEqual(resp_no_match.status_code, status.HTTP_200_OK)
         self.assertEqual(resp_no_match.data['total_count'], 0)
+
+
+class AdminMaterialUploadTests(APITestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(
+            email="admin_uploader@test.com",
+            password="AdminPassword123!",
+            role="ADMIN"
+        )
+        self.student_user = User.objects.create_user(
+            email="student_uploader@test.com",
+            password="StudentPassword123!",
+            role="STUDENT"
+        )
+        self.admin_token = str(RefreshToken.for_user(self.admin_user).access_token)
+        self.student_token = str(RefreshToken.for_user(self.student_user).access_token)
+
+        self.board = Board.objects.create(name="CBSE", slug="cbse")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.subject = Subject.objects.create(academic_class=self.academic_class, name="Physics", slug="physics")
+        self.chapter = Chapter.objects.create(
+            subject=self.subject,
+            chapter_number=1,
+            title="Light - Reflection and Refraction",
+            slug="light-reflection"
+        )
+
+        self.created_files = []
+
+    def tearDown(self):
+        # Clean up files created during tests
+        protected_root = getattr(settings, 'PROTECTED_MEDIA_ROOT', settings.BASE_DIR / 'protected_media')
+        for rel_path in self.created_files:
+            full_path = os.path.join(protected_root, rel_path)
+            if os.path.exists(full_path):
+                try:
+                    os.remove(full_path)
+                except OSError:
+                    pass
+
+    def test_admin_successful_pdf_upload(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        pdf_content = b"%PDF-1.4 sample binary pdf stream data with valid header"
+        pdf_file = SimpleUploadedFile("formula_sheet.pdf", pdf_content, content_type="application/pdf")
+
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {
+            'file': pdf_file,
+            'title': 'Formula Sheet & Diagrams'
+        }, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.data
+        self.assertEqual(data['title'], 'Formula Sheet & Diagrams')
+        self.assertEqual(data['mime_type'], 'application/pdf')
+        self.assertEqual(data['chapter'], self.chapter.id)
+        self.assertEqual(data['file_size_bytes'], len(pdf_content))
+        self.assertTrue(data['file_path'].endswith('.pdf'))
+        self.assertTrue(data['file_path'].startswith('materials/'))
+
+        self.created_files.append(data['file_path'])
+
+        # Verify file is stored on private disk with non-guessable UUID
+        protected_root = getattr(settings, 'PROTECTED_MEDIA_ROOT', settings.BASE_DIR / 'protected_media')
+        full_path = os.path.join(protected_root, data['file_path'])
+        self.assertTrue(os.path.exists(full_path))
+        with open(full_path, 'rb') as f:
+            self.assertEqual(f.read(), pdf_content)
+
+        # Verify database record
+        material = Material.objects.get(id=data['id'])
+        self.assertEqual(material.chapter, self.chapter)
+        self.assertEqual(material.title, 'Formula Sheet & Diagrams')
+        self.assertEqual(material.file_path, data['file_path'])
+
+    def test_admin_upload_rejects_non_pdf_mime_type(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        text_file = SimpleUploadedFile("notes.txt", b"Plain text note content", content_type="text/plain")
+
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {'file': text_file}, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("application/pdf", response.data['error'])
+
+    def test_admin_upload_rejects_corrupt_header_pdf(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        # MIME type claims to be PDF, but header is not %PDF
+        fake_pdf = SimpleUploadedFile("fake.pdf", b"NOTAPDF header content", content_type="application/pdf")
+
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {'file': fake_pdf}, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid or corrupted PDF file header", response.data['error'])
+
+    def test_admin_upload_rejects_oversized_file(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        # 25MB + 1KB
+        oversized_data = b"%PDF-" + b"0" * (25 * 1024 * 1024 + 1024)
+        big_file = SimpleUploadedFile("big.pdf", oversized_data, content_type="application/pdf")
+
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {'file': big_file}, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("File size exceeds the 25MB limit", response.data['error'])
+
+    def test_admin_upload_missing_file_returns_400(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {'title': 'Empty'}, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_student_forbidden_from_upload(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.student_token}')
+        pdf_file = SimpleUploadedFile("doc.pdf", b"%PDF-1.4 doc", content_type="application/pdf")
+
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {'file': pdf_file}, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_upload(self):
+        pdf_file = SimpleUploadedFile("doc.pdf", b"%PDF-1.4 doc", content_type="application/pdf")
+        url = f'/api/v1/admin/chapters/{self.chapter.id}/upload-material/'
+        response = self.client.post(url, {'file': pdf_file}, format='multipart')
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
 

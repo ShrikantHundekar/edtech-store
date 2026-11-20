@@ -99,3 +99,23 @@ class ChapterSerializer(serializers.ModelSerializer):
         if not data.get('slug') and data.get('title'):
             data['slug'] = slugify(data['title'])
         return super().to_internal_value(data)
+
+
+class MaterialSerializer(serializers.ModelSerializer):
+    chapter_title = serializers.CharField(source='chapter.title', read_only=True)
+
+    class Meta:
+        model = Material
+        fields = (
+            'id',
+            'chapter',
+            'chapter_title',
+            'title',
+            'file_path',
+            'file_size_bytes',
+            'mime_type',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at', 'file_size_bytes', 'mime_type')
+

@@ -1,6 +1,11 @@
+import os
+import uuid
+from django.conf import settings
 from rest_framework import viewsets, generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from apps.accounts.permissions import IsAdminRole
@@ -10,6 +15,7 @@ from .serializers import (
     ClassLevelSerializer,
     SubjectSerializer,
     ChapterSerializer,
+    MaterialSerializer,
 )
 
 
@@ -72,6 +78,81 @@ class AdminChapterViewSet(viewsets.ModelViewSet):
         if subject_id:
             qs = qs.filter(subject_id=subject_id)
         return qs
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='upload-material',
+        parser_classes=[MultiPartParser, FormParser],
+        permission_classes=[IsAdminRole],
+    )
+    def upload_material(self, request, pk=None):
+        """
+        POST /api/v1/admin/chapters/{id}/upload-material/
+        Validates MIME type strictly as application/pdf, enforces max size (25MB),
+        and stores the file with a non-guessable UUID on private storage.
+        """
+        chapter = self.get_object()
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response(
+                {'error': 'No file uploaded. Please provide a "file" in the multipart form data.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 1. Enforce maximum file size (25MB)
+        max_size_bytes = 25 * 1024 * 1024
+        if file_obj.size > max_size_bytes:
+            return Response(
+                {'error': f'File size exceeds the 25MB limit. Uploaded size is {file_obj.size / (1024*1024):.2f}MB.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 2. Validate MIME type strictly application/pdf
+        content_type = getattr(file_obj, 'content_type', '')
+        if content_type != 'application/pdf':
+            return Response(
+                {'error': 'Invalid MIME type. Only application/pdf files are permitted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Verify magic PDF bytes in file header (%PDF-)
+        header = file_obj.read(5)
+        file_obj.seek(0)
+        if not header.startswith(b'%PDF'):
+            return Response(
+                {'error': 'Invalid or corrupted PDF file header.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 3. Store on private disk with non-guessable UUID filename
+        protected_root = getattr(settings, 'PROTECTED_MEDIA_ROOT', settings.BASE_DIR / 'protected_media')
+        materials_dir = os.path.join(protected_root, 'materials')
+        os.makedirs(materials_dir, exist_ok=True)
+
+        uuid_filename = f"{uuid.uuid4().hex}.pdf"
+        relative_path = os.path.join('materials', uuid_filename).replace('\\', '/')
+        absolute_path = os.path.join(materials_dir, uuid_filename)
+
+        with open(absolute_path, 'wb+') as destination:
+            for chunk in file_obj.chunks():
+                destination.write(chunk)
+
+        title = request.data.get('title')
+        if not title or not title.strip():
+            title = os.path.splitext(file_obj.name)[0] or f"{chapter.title} Notes"
+
+        material = Material.objects.create(
+            chapter=chapter,
+            title=title.strip(),
+            file_path=relative_path,
+            file_size_bytes=file_obj.size,
+            mime_type='application/pdf',
+        )
+
+        serializer = MaterialSerializer(material)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
 
 # =====================================================================
