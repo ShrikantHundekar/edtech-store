@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.db.utils import IntegrityError
 from django.urls import reverse
 from rest_framework import status
@@ -84,6 +85,7 @@ class CustomUserModelTests(TestCase):
 
 class AuthAPITests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.register_url = reverse('auth_register')
         self.login_url = reverse('auth_login')
         self.refresh_url = reverse('auth_refresh')
@@ -223,3 +225,20 @@ class AuthAPITests(APITestCase):
         self.assertEqual(auth_resp.data['email'], "existingstudent@example.com")
         self.assertEqual(auth_resp.data['full_name'], "Existing Student")
         self.assertEqual(auth_resp.data['role'], "STUDENT")
+
+    def test_login_rate_limiting(self):
+        # 5 attempts allowed per minute
+        payload = {
+            "email": "existingstudent@example.com",
+            "password": "WrongPasswordForThrottle!"
+        }
+
+        for attempt in range(5):
+            resp = self.client.post(self.login_url, payload, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # 6th attempt must be throttled with HTTP 429
+        throttled_resp = self.client.post(self.login_url, payload, format='json')
+        self.assertEqual(throttled_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn('detail', throttled_resp.data)
+

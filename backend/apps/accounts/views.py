@@ -1,6 +1,7 @@
 from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer
@@ -11,9 +12,12 @@ class RegisterView(generics.CreateAPIView):
     POST /api/v1/auth/register/
     Public endpoint for registering a new student account.
     Returns the newly created user profile and initial JWT access + refresh tokens.
+    Throttled to 5 requests per minute per IP.
     """
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth_register'
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -46,8 +50,11 @@ class LoginView(APIView):
     POST /api/v1/auth/login/
     Public endpoint to authenticate via email and password.
     Returns user profile and JWT access + refresh tokens.
+    Throttled to 5 requests per minute per IP to prevent brute-force attacks.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth_login'
 
     def post(self, request, *args, **kwargs):
         serializer = LoginSerializer(data=request.data)

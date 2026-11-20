@@ -143,6 +143,14 @@ PROTECTED_MEDIA_ROOT = BASE_DIR / 'protected_media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
+# Cache configuration for Throttling & Session caching
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'edtech-store-cache',
+    }
+}
+
 # Django REST Framework Settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -156,6 +164,17 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/minute',
+        'user': '1000/minute',
+        'auth_login': '5/minute',
+        'auth_register': '5/minute',
+    },
 }
 
 # SimpleJWT Settings
