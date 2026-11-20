@@ -107,6 +107,82 @@ class Product(models.Model):
         """Helper returning price in standard rupees."""
         return self.current_price_paise / 100.0
 
+    @property
+    def access_duration(self) -> str:
+        """Returns standard access duration label."""
+        if self.product_type == self.PRODUCT_TYPE_MONTHLY_PASS:
+            return "30 Days"
+        elif self.product_type == self.PRODUCT_TYPE_ANNUAL_PASS:
+            return "365 Days"
+        return "Lifetime"
+
+    @property
+    def gst_breakdown(self) -> dict:
+        """Returns the 18% inclusive GST calculation dictionary."""
+        from .services import calculate_gst_breakdown
+        return calculate_gst_breakdown(self.current_price_paise)
+
+    def get_inclusions(self) -> list:
+        """
+        Returns structured list of items included in this product based on its product_type.
+        """
+        if self.product_type in (self.PRODUCT_TYPE_CHAPTER_NOTES, self.PRODUCT_TYPE_FREE_SAMPLE):
+            if self.chapter:
+                return [{
+                    'target_type': 'CHAPTER',
+                    'id': self.chapter.id,
+                    'title': self.chapter.title,
+                    'chapter_number': self.chapter.chapter_number,
+                    'subject': self.chapter.subject.name if getattr(self.chapter, 'subject', None) else None,
+                    'is_free_sample': self.chapter.is_free_sample,
+                }]
+            return []
+
+        elif self.product_type == self.PRODUCT_TYPE_SUBJECT_PACK:
+            if self.subject:
+                chapters = self.subject.chapters.all().order_by('chapter_number')
+                return [{
+                    'target_type': 'CHAPTER',
+                    'id': ch.id,
+                    'title': ch.title,
+                    'chapter_number': ch.chapter_number,
+                    'is_free_sample': ch.is_free_sample,
+                } for ch in chapters]
+            return []
+
+        elif self.product_type in (self.PRODUCT_TYPE_MONTHLY_PASS, self.PRODUCT_TYPE_ANNUAL_PASS):
+            if self.academic_class:
+                subjects = self.academic_class.subjects.prefetch_related('chapters').all().order_by('name')
+                return [{
+                    'target_type': 'SUBJECT',
+                    'id': sub.id,
+                    'name': sub.name,
+                    'chapters_count': sub.chapters.count(),
+                } for sub in subjects]
+            return []
+
+        elif self.product_type == self.PRODUCT_TYPE_BUNDLE:
+            items = []
+            for item in self.bundle_items.select_related('chapter__subject', 'subject').all():
+                if item.target_type == item.TARGET_TYPE_CHAPTER and item.chapter:
+                    items.append({
+                        'target_type': 'CHAPTER',
+                        'id': item.chapter.id,
+                        'title': item.chapter.title,
+                        'chapter_number': item.chapter.chapter_number,
+                        'subject': item.chapter.subject.name if getattr(item.chapter, 'subject', None) else None,
+                    })
+                elif item.target_type == item.TARGET_TYPE_SUBJECT and item.subject:
+                    items.append({
+                        'target_type': 'SUBJECT',
+                        'id': item.subject.id,
+                        'name': item.subject.name,
+                    })
+            return items
+
+        return []
+
+
 
 class Price(models.Model):
     """

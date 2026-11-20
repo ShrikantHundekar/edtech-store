@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/v1/admin/', include('apps.catalog.admin_urls')),
     path('api/v1/catalog/', include('apps.catalog.public_urls')),
     path('api/v1/materials/', include('apps.catalog.material_urls')),
+    path('api/v1/products/', include('apps.products.urls')),
     # Explicit security barriers: Restrict raw direct access to notes
     path('media/notes/<path:path>', block_direct_media_access, name='block_direct_media_notes'),
     path('media/materials/<path:path>', block_direct_media_access, name='block_direct_media_materials'),
