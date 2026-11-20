@@ -1,6 +1,8 @@
 import os
 import shutil
 from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.core.exceptions import ValidationError
@@ -10,6 +12,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
+from apps.entitlements.models import Entitlement
 from .models import Board, ClassLevel, Subject, Chapter, Material
 
 User = get_user_model()
@@ -586,6 +589,271 @@ class FreeSampleChapterTests(APITestCase):
         found = next((ch for ch in resp_search.data['chapters'] if ch['id'] == self.chapter1.id), None)
         self.assertIsNotNone(found)
         self.assertTrue(found['is_free_sample'])
+
+
+class ProtectedPDFStreamingTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            email="admin_stream@test.com",
+            password="AdminPassword123!",
+            role="ADMIN"
+        )
+        self.student_unentitled = User.objects.create_user(
+            email="unentitled@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.student_chapter = User.objects.create_user(
+            email="chapter_holder@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.student_subject = User.objects.create_user(
+            email="subject_holder@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.student_class = User.objects.create_user(
+            email="class_holder@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.student_expired = User.objects.create_user(
+            email="expired_holder@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.student_revoked = User.objects.create_user(
+            email="revoked_holder@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.student_other = User.objects.create_user(
+            email="other_subject_holder@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+
+        self.admin_token = str(RefreshToken.for_user(self.admin).access_token)
+        self.unentitled_token = str(RefreshToken.for_user(self.student_unentitled).access_token)
+        self.chapter_token = str(RefreshToken.for_user(self.student_chapter).access_token)
+        self.subject_token = str(RefreshToken.for_user(self.student_subject).access_token)
+        self.class_token = str(RefreshToken.for_user(self.student_class).access_token)
+        self.expired_token = str(RefreshToken.for_user(self.student_expired).access_token)
+        self.revoked_token = str(RefreshToken.for_user(self.student_revoked).access_token)
+        self.other_token = str(RefreshToken.for_user(self.student_other).access_token)
+
+        self.board = Board.objects.create(name="CBSE", slug="cbse")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.science = Subject.objects.create(academic_class=self.academic_class, name="Science", slug="science")
+        self.math = Subject.objects.create(academic_class=self.academic_class, name="Math", slug="math")
+
+        # Chapter 1 is free sample
+        self.ch_free = Chapter.objects.create(
+            subject=self.science,
+            chapter_number=1,
+            title="Chemical Reactions",
+            slug="chemical-reactions",
+            is_free_sample=True
+        )
+        # Chapter 2 is locked paid chapter
+        self.ch_paid = Chapter.objects.create(
+            subject=self.science,
+            chapter_number=2,
+            title="Acids, Bases and Salts",
+            slug="acids-bases",
+            is_free_sample=False
+        )
+
+        # Write real test PDF files in PROTECTED_MEDIA_ROOT
+        protected_root = getattr(settings, 'PROTECTED_MEDIA_ROOT', settings.BASE_DIR / 'protected_media')
+        mat_dir = os.path.join(protected_root, 'materials')
+        os.makedirs(mat_dir, exist_ok=True)
+
+        self.free_pdf_rel = 'materials/test_free_note.pdf'
+        self.paid_pdf_rel = 'materials/test_paid_note.pdf'
+        self.free_pdf_full = os.path.join(protected_root, self.free_pdf_rel)
+        self.paid_pdf_full = os.path.join(protected_root, self.paid_pdf_rel)
+
+        self.free_content = b"%PDF-1.4 Free sample study notes content"
+        self.paid_content = b"%PDF-1.4 Paid premium study notes content"
+
+        with open(self.free_pdf_full, 'wb') as f:
+            f.write(self.free_content)
+        with open(self.paid_pdf_full, 'wb') as f:
+            f.write(self.paid_content)
+
+        self.free_material = Material.objects.create(
+            chapter=self.ch_free,
+            title="Free Chemical Reactions Summary",
+            file_path=self.free_pdf_rel,
+            file_size_bytes=len(self.free_content),
+            mime_type='application/pdf'
+        )
+        self.paid_material = Material.objects.create(
+            chapter=self.ch_paid,
+            title="Acids and Bases Complete Guide",
+            file_path=self.paid_pdf_rel,
+            file_size_bytes=len(self.paid_content),
+            mime_type='application/pdf'
+        )
+
+        # Create entitlements
+        # 1. Chapter entitlement
+        Entitlement.objects.create(
+            user=self.student_chapter,
+            product_type='CHAPTER',
+            scope_id=self.ch_paid.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        # 2. Subject entitlement
+        Entitlement.objects.create(
+            user=self.student_subject,
+            product_type='SUBJECT',
+            scope_id=self.science.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        # 3. Class pass entitlement (valid for 30 days)
+        Entitlement.objects.create(
+            user=self.student_class,
+            product_type='CLASS_PASS',
+            scope_id=self.academic_class.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=1),
+            valid_until=timezone.now() + timedelta(days=29),
+            status='ACTIVE'
+        )
+
+        # 4. Expired class pass (expired 2 days ago)
+        Entitlement.objects.create(
+            user=self.student_expired,
+            product_type='CLASS_PASS',
+            scope_id=self.academic_class.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=32),
+            valid_until=timezone.now() - timedelta(days=2),
+            status='ACTIVE'
+        )
+
+        # 5. Revoked chapter entitlement
+        Entitlement.objects.create(
+            user=self.student_revoked,
+            product_type='CHAPTER',
+            scope_id=self.ch_paid.id,
+            access_type='LIFETIME',
+            status='REVOKED'
+        )
+
+        # 6. Entitlement for different subject (Math instead of Science)
+        Entitlement.objects.create(
+            user=self.student_other,
+            product_type='SUBJECT',
+            scope_id=self.math.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+    def tearDown(self):
+        if os.path.exists(self.free_pdf_full):
+            try:
+                os.remove(self.free_pdf_full)
+            except OSError:
+                pass
+        if os.path.exists(self.paid_pdf_full):
+            try:
+                os.remove(self.paid_pdf_full)
+            except OSError:
+                pass
+
+    def test_free_sample_streamable_by_anonymous(self):
+        # Anyone can stream free sample
+        resp = self.client.get(f'/api/v1/materials/{self.free_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        content = b"".join(resp.streaming_content) if resp.streaming else resp.content
+        self.assertEqual(content, self.free_content)
+
+    def test_free_sample_streamable_by_authenticated_student(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.unentitled_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.free_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_paid_material_rejected_for_anonymous(self):
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_paid_material_rejected_for_unentitled_student(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.unentitled_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("do not hold an active entitlement", resp.data['error'])
+
+    def test_paid_material_allowed_for_admin(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        content = b"".join(resp.streaming_content) if resp.streaming else resp.content
+        self.assertEqual(content, self.paid_content)
+
+    def test_paid_material_allowed_with_chapter_entitlement(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.chapter_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        content = b"".join(resp.streaming_content) if resp.streaming else resp.content
+        self.assertEqual(content, self.paid_content)
+
+    def test_paid_material_allowed_with_subject_pack(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.subject_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_paid_material_allowed_with_class_pass(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.class_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_paid_material_rejected_for_expired_pass(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.expired_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_paid_material_rejected_for_revoked_entitlement(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.revoked_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_paid_material_rejected_for_different_subject_entitlement(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.other_token}')
+        resp = self.client.get(f'/api/v1/materials/{self.paid_material.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_nonexistent_material_returns_404(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        resp = self.client.get('/api/v1/materials/99999/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_missing_file_on_disk_returns_404(self):
+        # Create DB record pointing to non-existent file
+        ghost_mat = Material.objects.create(
+            chapter=self.ch_free,
+            title="Ghost Note",
+            file_path="materials/non_existent_ghost.pdf",
+            file_size_bytes=100,
+            mime_type='application/pdf'
+        )
+        resp = self.client.get(f'/api/v1/materials/{ghost_mat.id}/stream/')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("could not be found on the storage server", resp.data['error'])
+
 
 
 

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'apps.products',
     'apps.orders',
     'apps.payments',
+    'apps.entitlements',
 ]
 
 # Custom User Model

@@ -1,6 +1,7 @@
 import os
 import uuid
 from django.conf import settings
+from django.http import FileResponse
 from rest_framework import viewsets, generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -9,6 +10,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from apps.accounts.permissions import IsAdminRole
+from apps.entitlements.services import has_access_to_material
 from .models import Board, ClassLevel, Subject, Chapter, Material
 from .serializers import (
     BoardSerializer,
@@ -364,3 +366,65 @@ class CatalogSearchView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class MaterialDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/materials/{material_id}/
+    Returns metadata for a study note.
+    """
+    queryset = Material.objects.all()
+    serializer_class = MaterialSerializer
+    permission_classes = [permissions.AllowAny]
+    lookup_field = 'id'
+    lookup_url_kwarg = 'material_id'
+
+
+class MaterialStreamView(APIView):
+    """
+    GET /api/v1/materials/{material_id}/stream/
+    Protected PDF streaming endpoint.
+    Verifies user entitlement before serving the file:
+    - If chapter is_free_sample: allows access without purchase.
+    - If user is ADMIN: allows access.
+    - If user has active Entitlement (Chapter, Subject Pack, or Class Pass): streams PDF.
+    - If un-entitled: returns HTTP 403 Forbidden.
+    - If file not found: returns HTTP 404 Not Found.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, material_id, *args, **kwargs):
+        material = get_object_or_404(
+            Material.objects.select_related('chapter__subject__academic_class'),
+            id=material_id
+        )
+
+        # Entitlement authorization check
+        if not has_access_to_material(request.user, material):
+            return Response(
+                {
+                    "error": "Access denied. You do not hold an active entitlement for this study material. Please purchase the corresponding chapter, subject pack, or class pass."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Locate protected file on disk
+        protected_root = getattr(settings, 'PROTECTED_MEDIA_ROOT', settings.BASE_DIR / 'protected_media')
+        if os.path.isabs(material.file_path):
+            file_path = material.file_path
+        else:
+            file_path = os.path.join(protected_root, material.file_path)
+
+        if not os.path.exists(file_path):
+            return Response(
+                {"error": "Material file could not be found on the storage server."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        file_handle = open(file_path, 'rb')
+        response = FileResponse(file_handle, content_type='application/pdf')
+        filename = f"{material.title}.pdf".replace('"', '')
+        response['Content-Disposition'] = f'inline; filename="{filename}"'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
