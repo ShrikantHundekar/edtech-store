@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Product, Price, BundleItem
+from .services import check_product_purchase_eligibility
 
 
 class PriceSerializer(serializers.ModelSerializer):
@@ -33,6 +34,9 @@ class ProductSerializer(serializers.ModelSerializer):
     access_duration = serializers.CharField(read_only=True)
     gst_breakdown = serializers.DictField(read_only=True)
     inclusions = serializers.SerializerMethodField()
+    purchase_state = serializers.SerializerMethodField()
+    can_purchase = serializers.SerializerMethodField()
+    purchase_state_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -57,9 +61,30 @@ class ProductSerializer(serializers.ModelSerializer):
             'access_duration',
             'gst_breakdown',
             'inclusions',
+            'purchase_state',
+            'can_purchase',
+            'purchase_state_reason',
             'created_at',
             'updated_at',
         )
 
+    def _get_eligibility(self, obj):
+        request = self.context.get('request')
+        user = request.user if request and hasattr(request, 'user') else None
+        return check_product_purchase_eligibility(user, obj)
+
     def get_inclusions(self, obj):
         return obj.get_inclusions()
+
+    def get_purchase_state(self, obj):
+        _, state, _ = self._get_eligibility(obj)
+        return state
+
+    def get_can_purchase(self, obj):
+        can_buy, _, _ = self._get_eligibility(obj)
+        return can_buy
+
+    def get_purchase_state_reason(self, obj):
+        _, _, reason = self._get_eligibility(obj)
+        return reason
+

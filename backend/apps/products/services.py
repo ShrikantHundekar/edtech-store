@@ -42,3 +42,174 @@ def calculate_gst_breakdown(price_inclusive_paise: int) -> dict:
         "cgst_inr": cgst / 100.0,
         "sgst_inr": sgst / 100.0,
     }
+
+
+def check_product_purchase_eligibility(user, product) -> tuple:
+    """
+    Evaluates a user's eligibility to purchase a specific product based on existing entitlements.
+    Returns:
+        tuple (can_purchase: bool, state: str, reason: str)
+        where state is strictly one of: 'BUY', 'OWNED', 'UPGRADE', 'UNLOCKED_VIA_PASS'
+    """
+    from apps.entitlements.models import Entitlement
+    from apps.products.models import Product
+    from django.utils import timezone
+    from django.db.models import Q
+
+    if not product.is_active:
+        return False, 'UNAVAILABLE', 'This product is currently inactive.'
+
+    # Free sample is unlocked without requiring purchase
+    if product.product_type == Product.PRODUCT_TYPE_FREE_SAMPLE:
+        return False, 'OWNED', 'Free sample is unlocked without requiring purchase.'
+
+    # Unauthenticated users default to BUY
+    if not user or not user.is_authenticated:
+        return True, 'BUY', 'Available for purchase.'
+
+    now = timezone.now()
+    active_entitlements = Entitlement.objects.filter(
+        user=user,
+        status='ACTIVE'
+    ).filter(
+        Q(access_type='LIFETIME') | Q(access_type='TIME_BOUND', valid_until__gt=now)
+    )
+
+    # 1. Determine target academic class and check active Class Pass
+    target_class_id = None
+    if product.academic_class_id:
+        target_class_id = product.academic_class_id
+    elif product.subject and product.subject.academic_class_id:
+        target_class_id = product.subject.academic_class_id
+    elif product.chapter and product.chapter.subject and product.chapter.subject.academic_class_id:
+        target_class_id = product.chapter.subject.academic_class_id
+
+    # If the product is Chapter Notes or Subject Pack, check if unlocked via Class Pass
+    if target_class_id and product.product_type in (
+        Product.PRODUCT_TYPE_CHAPTER_NOTES,
+        Product.PRODUCT_TYPE_SUBJECT_PACK
+    ):
+        has_active_pass = active_entitlements.filter(
+            product_type='CLASS_PASS',
+            scope_id=target_class_id
+        ).exists()
+        if has_active_pass:
+            return False, 'UNLOCKED_VIA_PASS', 'Unlocked with Class Pass'
+
+    # 2. Check CHAPTER_NOTES eligibility
+    if product.product_type == Product.PRODUCT_TYPE_CHAPTER_NOTES:
+        chapter = product.chapter
+        if not chapter:
+            return False, 'UNAVAILABLE', 'Chapter reference is missing.'
+
+        subject_id = chapter.subject_id
+        # Check if student owns the Subject Pack
+        if subject_id and active_entitlements.filter(product_type='SUBJECT', scope_id=subject_id).exists():
+            return False, 'OWNED', 'Owned (via Subject Pack)'
+
+        # Check if student already owns this chapter
+        if active_entitlements.filter(product_type='CHAPTER', scope_id=chapter.id).exists():
+            return False, 'OWNED', 'Owned'
+
+        return True, 'BUY', 'Available for purchase.'
+
+    # 3. Check SUBJECT_PACK eligibility
+    if product.product_type == Product.PRODUCT_TYPE_SUBJECT_PACK:
+        subject = product.subject
+        if not subject:
+            return False, 'UNAVAILABLE', 'Subject reference is missing.'
+
+        # Check if student already owns this Subject Pack
+        if active_entitlements.filter(product_type='SUBJECT', scope_id=subject.id).exists():
+            return False, 'OWNED', 'Owned'
+
+        # Check if student owns any individual chapters in this subject (Upgrade state)
+        owned_chapter_ids = list(active_entitlements.filter(
+            product_type='CHAPTER'
+        ).values_list('scope_id', flat=True))
+
+        if subject.chapters.filter(id__in=owned_chapter_ids).exists():
+            return True, 'UPGRADE', 'Eligible for Subject Pack upgrade credit.'
+
+        return True, 'BUY', 'Available for purchase.'
+
+    # 4. Check MONTHLY_PASS & ANNUAL_PASS
+    if product.product_type in (Product.PRODUCT_TYPE_MONTHLY_PASS, Product.PRODUCT_TYPE_ANNUAL_PASS):
+        return True, 'BUY', 'Available for purchase.'
+
+    # 5. Check BUNDLE
+    if product.product_type == Product.PRODUCT_TYPE_BUNDLE:
+        if active_entitlements.filter(product_type='BUNDLE', scope_id=product.id).exists():
+            return False, 'OWNED', 'Owned'
+        return True, 'BUY', 'Available for purchase.'
+
+    return True, 'BUY', 'Available for purchase.'
+
+
+def validate_cart_items_eligibility(user, products: list) -> tuple:
+    """
+    Validates a list of Product instances for overlapping or ineligible purchase.
+    Rejects:
+    - Products already owned or unlocked via Class Pass by the user.
+    - Duplicate products in the same cart.
+    - Intra-cart conflicts: e.g. purchasing both a Subject Pack and Chapter within that subject.
+    - Intra-cart conflicts: e.g. purchasing a Class Pass and any Subject/Chapter within that class.
+    
+    Returns:
+        tuple (is_valid: bool, errors: list[str])
+    """
+    from apps.products.models import Product
+
+    errors = []
+    seen_product_ids = set()
+    cart_class_pass_ids = set()
+    cart_subject_pack_ids = set()
+    cart_chapter_items = []
+
+    for p in products:
+        # Check duplicate
+        if p.id in seen_product_ids:
+            errors.append(f"Duplicate item in cart: '{p.title}'.")
+        seen_product_ids.add(p.id)
+
+        # Check user ownership / active pass
+        can_buy, state, reason = check_product_purchase_eligibility(user, p)
+        if not can_buy:
+            errors.append(f"Cannot purchase '{p.title}': {reason} (Status: {state}).")
+
+        # Categorize for intra-cart conflict checks
+        if p.product_type in (Product.PRODUCT_TYPE_MONTHLY_PASS, Product.PRODUCT_TYPE_ANNUAL_PASS):
+            if p.academic_class_id:
+                cart_class_pass_ids.add(p.academic_class_id)
+        elif p.product_type == Product.PRODUCT_TYPE_SUBJECT_PACK:
+            if p.subject_id:
+                cart_subject_pack_ids.add(p.subject_id)
+        elif p.product_type == Product.PRODUCT_TYPE_CHAPTER_NOTES:
+            if p.chapter:
+                cart_chapter_items.append(p)
+
+    # Intra-cart conflict: Class Pass + Subject / Chapter in same class
+    for p in products:
+        if p.product_type in (Product.PRODUCT_TYPE_CHAPTER_NOTES, Product.PRODUCT_TYPE_SUBJECT_PACK):
+            target_class_id = None
+            if p.academic_class_id:
+                target_class_id = p.academic_class_id
+            elif p.subject and p.subject.academic_class_id:
+                target_class_id = p.subject.academic_class_id
+            elif p.chapter and p.chapter.subject and p.chapter.subject.academic_class_id:
+                target_class_id = p.chapter.subject.academic_class_id
+
+            if target_class_id and target_class_id in cart_class_pass_ids:
+                errors.append(
+                    f"Cart conflict: '{p.title}' is already unlocked by the Class Pass in your cart."
+                )
+
+    # Intra-cart conflict: Subject Pack + Chapter in same subject
+    for p in cart_chapter_items:
+        if p.chapter and p.chapter.subject_id in cart_subject_pack_ids:
+            errors.append(
+                f"Cart conflict: Cannot purchase chapter note '{p.title}' together with its Subject Pack in the same cart."
+            )
+
+    return (len(errors) == 0, errors)
+

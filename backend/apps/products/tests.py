@@ -1,9 +1,16 @@
+from datetime import timedelta
+from django.utils import timezone
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APITestCase
 from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
 from apps.catalog.models import Board, ClassLevel, Subject, Chapter
+from apps.entitlements.models import Entitlement
 from .models import Product, Price, BundleItem
 from .services import calculate_gst_breakdown
+
+User = get_user_model()
 
 
 class ProductAndPriceModelTests(TestCase):
@@ -318,4 +325,253 @@ class ProductCatalogAPITests(APITestCase):
     def test_nonexistent_product_returns_404(self):
         resp = self.client.get('/api/v1/products/99999/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ProductOwnershipAndOverlappingCartTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="student_buyer@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+
+        self.board = Board.objects.create(name="CBSE", slug="cbse")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.math = Subject.objects.create(academic_class=self.academic_class, name="Mathematics", slug="math")
+        self.science = Subject.objects.create(academic_class=self.academic_class, name="Science", slug="science")
+
+        self.ch_math_1 = Chapter.objects.create(subject=self.math, chapter_number=1, title="Real Numbers", slug="real-numbers")
+        self.ch_math_2 = Chapter.objects.create(subject=self.math, chapter_number=2, title="Polynomials", slug="polynomials")
+        self.ch_sci_1 = Chapter.objects.create(subject=self.science, chapter_number=1, title="Chemical Reactions", slug="chem-react")
+
+        # Products
+        self.prod_ch_math_1 = Product.objects.create(
+            title="Math Chapter 1 Notes",
+            slug="prod-math-ch1",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.ch_math_1,
+            subject=self.math,
+            academic_class=self.academic_class,
+            board=self.board
+        )
+        Price.objects.create(product=self.prod_ch_math_1, amount_paise=4900, is_current=True)
+
+        self.prod_ch_math_2 = Product.objects.create(
+            title="Math Chapter 2 Notes",
+            slug="prod-math-ch2",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.ch_math_2,
+            subject=self.math,
+            academic_class=self.academic_class,
+            board=self.board
+        )
+        Price.objects.create(product=self.prod_ch_math_2, amount_paise=4900, is_current=True)
+
+        self.prod_math_pack = Product.objects.create(
+            title="Mathematics Subject Pack",
+            slug="prod-math-pack",
+            product_type=Product.PRODUCT_TYPE_SUBJECT_PACK,
+            subject=self.math,
+            academic_class=self.academic_class,
+            board=self.board
+        )
+        Price.objects.create(product=self.prod_math_pack, amount_paise=49900, is_current=True)
+
+        self.prod_sci_pack = Product.objects.create(
+            title="Science Subject Pack",
+            slug="prod-sci-pack",
+            product_type=Product.PRODUCT_TYPE_SUBJECT_PACK,
+            subject=self.science,
+            academic_class=self.academic_class,
+            board=self.board
+        )
+        Price.objects.create(product=self.prod_sci_pack, amount_paise=49900, is_current=True)
+
+        self.prod_class_pass = Product.objects.create(
+            title="Class 10 Monthly Pass",
+            slug="prod-class-10-pass",
+            product_type=Product.PRODUCT_TYPE_MONTHLY_PASS,
+            academic_class=self.academic_class,
+            board=self.board
+        )
+        Price.objects.create(product=self.prod_class_pass, amount_paise=29900, is_current=True)
+
+    def test_default_state_is_buy(self):
+        # Unauthenticated user
+        resp = self.client.get(f'/api/v1/products/{self.prod_ch_math_1.id}/ownership/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['purchase_state'], 'BUY')
+        self.assertTrue(resp.data['can_purchase'])
+
+        # Authenticated student with no entitlements
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        resp_auth = self.client.get(f'/api/v1/products/{self.prod_ch_math_1.id}/ownership/')
+        self.assertEqual(resp_auth.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_auth.data['purchase_state'], 'BUY')
+        self.assertTrue(resp_auth.data['can_purchase'])
+
+    def test_chapter_ownership_marks_owned_and_subject_pack_upgrade(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant entitlement for Math Chapter 1
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.ch_math_1.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        # 1. Math Chapter 1 is now OWNED
+        resp_ch1 = self.client.get(f'/api/v1/products/{self.prod_ch_math_1.id}/ownership/')
+        self.assertEqual(resp_ch1.data['purchase_state'], 'OWNED')
+        self.assertFalse(resp_ch1.data['can_purchase'])
+
+        # 2. Math Chapter 2 (un-owned) is still BUY
+        resp_ch2 = self.client.get(f'/api/v1/products/{self.prod_ch_math_2.id}/ownership/')
+        self.assertEqual(resp_ch2.data['purchase_state'], 'BUY')
+        self.assertTrue(resp_ch2.data['can_purchase'])
+
+        # 3. Math Subject Pack transitions to UPGRADE state (eligible for upgrade credit)
+        resp_pack = self.client.get(f'/api/v1/products/{self.prod_math_pack.id}/ownership/')
+        self.assertEqual(resp_pack.data['purchase_state'], 'UPGRADE')
+        self.assertTrue(resp_pack.data['can_purchase'])
+
+    def test_subject_pack_ownership_marks_pack_and_all_chapters_owned(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant entitlement for Math Subject Pack
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='SUBJECT',
+            scope_id=self.math.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        # 1. Subject Pack is OWNED
+        resp_pack = self.client.get(f'/api/v1/products/{self.prod_math_pack.id}/ownership/')
+        self.assertEqual(resp_pack.data['purchase_state'], 'OWNED')
+        self.assertFalse(resp_pack.data['can_purchase'])
+
+        # 2. Both individual chapters under Math are now OWNED (via Subject Pack)
+        resp_ch1 = self.client.get(f'/api/v1/products/{self.prod_ch_math_1.id}/ownership/')
+        self.assertEqual(resp_ch1.data['purchase_state'], 'OWNED')
+        self.assertFalse(resp_ch1.data['can_purchase'])
+        self.assertIn("Subject Pack", resp_ch1.data['reason'])
+
+        resp_ch2 = self.client.get(f'/api/v1/products/{self.prod_ch_math_2.id}/ownership/')
+        self.assertEqual(resp_ch2.data['purchase_state'], 'OWNED')
+        self.assertFalse(resp_ch2.data['can_purchase'])
+
+    def test_class_pass_ownership_marks_chapters_and_subjects_unlocked_via_pass(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant active Class Pass for Class 10
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=self.academic_class.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=1),
+            valid_until=timezone.now() + timedelta(days=29),
+            status='ACTIVE'
+        )
+
+        # 1. Chapter in Class 10 is UNLOCKED_VIA_PASS
+        resp_ch = self.client.get(f'/api/v1/products/{self.prod_ch_math_1.id}/ownership/')
+        self.assertEqual(resp_ch.data['purchase_state'], 'UNLOCKED_VIA_PASS')
+        self.assertFalse(resp_ch.data['can_purchase'])
+
+        # 2. Subject in Class 10 is UNLOCKED_VIA_PASS
+        resp_sub = self.client.get(f'/api/v1/products/{self.prod_math_pack.id}/ownership/')
+        self.assertEqual(resp_sub.data['purchase_state'], 'UNLOCKED_VIA_PASS')
+        self.assertFalse(resp_sub.data['can_purchase'])
+
+    def test_cart_validation_rejects_already_owned_items(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant Math Chapter 1
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.ch_math_1.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        # Try to validate cart with Math Chapter 1
+        resp = self.client.post('/api/v1/cart/validate/', {
+            "items": [{"product_id": self.prod_ch_math_1.id}]
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data['valid'])
+        self.assertIn("Owned", str(resp.data['errors']))
+
+    def test_cart_validation_rejects_items_unlocked_by_class_pass(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant active Class Pass
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=self.academic_class.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=1),
+            valid_until=timezone.now() + timedelta(days=29),
+            status='ACTIVE'
+        )
+
+        resp = self.client.post('/api/v1/cart/validate/', {
+            "items": [{"product_id": self.prod_math_pack.id}]
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Unlocked with Class Pass", str(resp.data['errors']))
+
+    def test_cart_validation_rejects_intra_cart_overlap_pack_and_chapter(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # User tries to buy both Math Subject Pack AND Math Chapter 1 in the SAME cart
+        resp = self.client.post('/api/v1/cart/validate/', {
+            "items": [
+                {"product_id": self.prod_math_pack.id},
+                {"product_id": self.prod_ch_math_1.id}
+            ]
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("together with its Subject Pack", str(resp.data['errors']))
+
+    def test_cart_validation_rejects_intra_cart_overlap_pass_and_subject(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # User tries to buy both Class Pass AND Subject Pack for that class in the SAME cart
+        resp = self.client.post('/api/v1/cart/validate/', {
+            "items": [
+                {"product_id": self.prod_class_pass.id},
+                {"product_id": self.prod_sci_pack.id}
+            ]
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already unlocked by the Class Pass", str(resp.data['errors']))
+
+    def test_cart_validation_accepts_valid_non_overlapping_items(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # User buys Science Pack + Math Chapter 1 (distinct scopes, no overlap)
+        resp = self.client.post('/api/v1/cart/validate/', {
+            "items": [
+                {"product_id": self.prod_sci_pack.id},
+                {"product_id": self.prod_ch_math_1.id}
+            ]
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.data['valid'])
+        self.assertEqual(resp.data['items_count'], 2)
+
 
