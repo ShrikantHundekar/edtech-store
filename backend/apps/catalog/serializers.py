@@ -38,3 +38,64 @@ class ClassLevelSerializer(serializers.ModelSerializer):
         if not data.get('slug') and data.get('name'):
             data['slug'] = slugify(data['name'])
         return super().to_internal_value(data)
+
+
+class SubjectSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source='academic_class.name', read_only=True)
+    board_name = serializers.CharField(source='academic_class.board.name', read_only=True)
+    chapters_count = serializers.IntegerField(source='chapters.count', read_only=True)
+    slug = serializers.SlugField(required=False)
+
+    class Meta:
+        model = Subject
+        fields = (
+            'id',
+            'academic_class',
+            'class_name',
+            'board_name',
+            'name',
+            'slug',
+            'thumbnail_url',
+            'chapters_count',
+            'created_at',
+            'updated_at',
+        )
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        else:
+            data = dict(data)
+        if not data.get('slug') and data.get('name'):
+            data['slug'] = slugify(data['name'])
+        return super().to_internal_value(data)
+
+
+class ChapterSerializer(serializers.ModelSerializer):
+    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    materials_count = serializers.IntegerField(source='materials.count', read_only=True)
+    slug = serializers.SlugField(required=False)
+
+    class Meta:
+        model = Chapter
+        fields = (
+            'id',
+            'subject',
+            'subject_name',
+            'chapter_number',
+            'title',
+            'slug',
+            'is_free_sample',
+            'materials_count',
+            'created_at',
+            'updated_at',
+        )
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        else:
+            data = dict(data)
+        if not data.get('slug') and data.get('title'):
+            data['slug'] = slugify(data['title'])
+        return super().to_internal_value(data)

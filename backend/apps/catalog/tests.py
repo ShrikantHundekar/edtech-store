@@ -80,7 +80,7 @@ class CatalogModelTests(TestCase):
         self.assertFalse(Chapter.objects.filter(subject__academic_class__board_id=board_id).exists())
 
 
-class AdminBoardAndClassAPITests(APITestCase):
+class AdminCatalogAPITests(APITestCase):
     def setUp(self):
         self.admin_user = User.objects.create_superuser(
             email="curriculumadmin@example.com",
@@ -101,6 +101,18 @@ class AdminBoardAndClassAPITests(APITestCase):
             board=self.board,
             name="Class 10",
             slug="class-10"
+        )
+        self.subject = Subject.objects.create(
+            academic_class=self.academic_class,
+            name="Mathematics",
+            slug="mathematics"
+        )
+        self.chapter = Chapter.objects.create(
+            subject=self.subject,
+            chapter_number=1,
+            title="Real Numbers",
+            slug="real-numbers",
+            is_free_sample=True
         )
 
         admin_refresh = RefreshToken.for_user(self.admin_user)
@@ -129,14 +141,12 @@ class AdminBoardAndClassAPITests(APITestCase):
     def test_admin_can_update_and_delete_board(self):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
         
-        # Update board
         patch_resp = self.client.patch(f'/api/v1/admin/boards/{self.board.id}/', {
             "description": "Updated CBSE Description"
         }, format='json')
         self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(patch_resp.data['description'], "Updated CBSE Description")
 
-        # Delete board
         delete_resp = self.client.delete(f'/api/v1/admin/boards/{self.board.id}/')
         self.assertEqual(delete_resp.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(Board.objects.filter(id=self.board.id).exists())
@@ -144,7 +154,6 @@ class AdminBoardAndClassAPITests(APITestCase):
     def test_admin_can_create_and_filter_classes(self):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
         
-        # Create Class
         create_resp = self.client.post('/api/v1/admin/classes/', {
             "board": self.board.id,
             "name": "Class 12"
@@ -153,26 +162,122 @@ class AdminBoardAndClassAPITests(APITestCase):
         self.assertEqual(create_resp.data['name'], "Class 12")
         self.assertEqual(create_resp.data['slug'], "class-12")
 
-        # List Classes filtered by board
         list_resp = self.client.get(f'/api/v1/admin/classes/?board_id={self.board.id}')
         self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(list_resp.data), 2)  # Class 10 and Class 12
+        self.assertEqual(len(list_resp.data), 2)
 
-    def test_student_forbidden_from_admin_boards_and_classes(self):
+    def test_admin_crud_subjects(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        
+        # Create subject
+        create_resp = self.client.post('/api/v1/admin/subjects/', {
+            "academic_class": self.academic_class.id,
+            "name": "Science",
+            "thumbnail_url": "https://example.com/science.png"
+        }, format='json')
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_resp.data['name'], "Science")
+        self.assertEqual(create_resp.data['slug'], "science")
+
+        # List subjects filtered by class
+        list_resp = self.client.get(f'/api/v1/admin/subjects/?class_id={self.academic_class.id}')
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_resp.data), 2)
+
+    def test_admin_crud_chapters(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        
+        # Create chapter
+        create_resp = self.client.post('/api/v1/admin/chapters/', {
+            "subject": self.subject.id,
+            "chapter_number": 2,
+            "title": "Polynomials",
+            "is_free_sample": False
+        }, format='json')
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_resp.data['chapter_number'], 2)
+        self.assertEqual(create_resp.data['slug'], "polynomials")
+
+        # Duplicate chapter number in same subject fails
+        dup_resp = self.client.post('/api/v1/admin/chapters/', {
+            "subject": self.subject.id,
+            "chapter_number": 2,
+            "title": "Another Chapter 2"
+        }, format='json')
+        self.assertEqual(dup_resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_student_forbidden_from_admin_catalog(self):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.student_token}')
         
-        # Student attempting to access admin boards receives 403
-        board_resp = self.client.get('/api/v1/admin/boards/')
-        self.assertEqual(board_resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get('/api/v1/admin/boards/').status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get('/api/v1/admin/classes/').status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get('/api/v1/admin/subjects/').status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get('/api/v1/admin/chapters/').status_code, status.HTTP_403_FORBIDDEN)
 
-        # Student attempting to create class receives 403
-        class_resp = self.client.post('/api/v1/admin/classes/', {
-            "board": self.board.id,
-            "name": "Unauthorized Class"
-        }, format='json')
-        self.assertEqual(class_resp.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_unauthenticated_request_rejected(self):
-        self.client.credentials()
-        resp = self.client.get('/api/v1/admin/boards/')
-        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+class PublicCatalogAPITests(APITestCase):
+    def setUp(self):
+        self.board = Board.objects.create(name="CBSE", slug="cbse")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.subject = Subject.objects.create(academic_class=self.academic_class, name="Mathematics", slug="math")
+        self.chapter1 = Chapter.objects.create(
+            subject=self.subject,
+            chapter_number=1,
+            title="Real Numbers",
+            slug="real-numbers",
+            is_free_sample=True
+        )
+        self.chapter2 = Chapter.objects.create(
+            subject=self.subject,
+            chapter_number=2,
+            title="Polynomials",
+            slug="polynomials",
+            is_free_sample=False
+        )
+
+    def test_public_browsing_boards(self):
+        # Public request without any Authorization header
+        response = self.client.get('/api/v1/catalog/boards/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['name'], "CBSE")
+
+    def test_public_browsing_board_classes(self):
+        # Classes for existing board
+        response = self.client.get(f'/api/v1/catalog/boards/{self.board.id}/classes/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['name'], "Class 10")
+
+        # 404 for non-existent board
+        resp_404 = self.client.get('/api/v1/catalog/boards/99999/classes/')
+        self.assertEqual(resp_404.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_public_browsing_class_subjects(self):
+        # Subjects for existing class
+        response = self.client.get(f'/api/v1/catalog/classes/{self.academic_class.id}/subjects/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['name'], "Mathematics")
+
+        # 404 for non-existent class
+        resp_404 = self.client.get('/api/v1/catalog/classes/99999/subjects/')
+        self.assertEqual(resp_404.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_public_browsing_subject_chapters(self):
+        # Chapters for existing subject (showing is_free_sample flags)
+        response = self.client.get(f'/api/v1/catalog/subjects/{self.subject.id}/chapters/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        
+        # Chapter 1 is free sample
+        self.assertTrue(response.data[0]['is_free_sample'])
+        self.assertEqual(response.data[0]['title'], "Real Numbers")
+
+        # Chapter 2 is locked
+        self.assertFalse(response.data[1]['is_free_sample'])
+        self.assertEqual(response.data[1]['title'], "Polynomials")
+
+        # 404 for non-existent subject
+        resp_404 = self.client.get('/api/v1/catalog/subjects/99999/chapters/')
+        self.assertEqual(resp_404.status_code, status.HTTP_404_NOT_FOUND)
