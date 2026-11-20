@@ -91,11 +91,17 @@ class AuthAPITests(APITestCase):
         self.refresh_url = reverse('auth_refresh')
         self.logout_url = reverse('auth_logout')
         self.me_url = reverse('auth_me')
+        self.admin_check_url = reverse('auth_admin_check')
 
         self.test_user = User.objects.create_user(
             email="existingstudent@example.com",
             password="SecurePassword123!",
             full_name="Existing Student"
+        )
+        self.admin_user = User.objects.create_superuser(
+            email="platformadmin@example.com",
+            password="AdminSecretPassword123!",
+            full_name="Platform Admin"
         )
 
     def test_student_registration_success(self):
@@ -241,4 +247,27 @@ class AuthAPITests(APITestCase):
         throttled_resp = self.client.post(self.login_url, payload, format='json')
         self.assertEqual(throttled_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
         self.assertIn('detail', throttled_resp.data)
+
+    def test_admin_endpoint_unauthenticated_returns_401(self):
+        self.client.credentials()
+        response = self.client.get(self.admin_check_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_student_accessing_admin_endpoint_returns_403(self):
+        # Authenticate as student
+        refresh = RefreshToken.for_user(self.test_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        response = self.client.get(self.admin_check_url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('detail', response.data)
+
+    def test_admin_accessing_admin_endpoint_returns_200(self):
+        # Authenticate as admin
+        refresh = RefreshToken.for_user(self.admin_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        response = self.client.get(self.admin_check_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['user'], "platformadmin@example.com")
+        self.assertEqual(response.data['role'], "ADMIN")
+
 

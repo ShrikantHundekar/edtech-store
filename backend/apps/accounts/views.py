@@ -5,6 +5,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer
+from .permissions import IsAdminRole, IsStudentRole
 
 
 class RegisterView(generics.CreateAPIView):
@@ -115,3 +116,22 @@ class UserProfileView(APIView):
     def get(self, request, *args, **kwargs):
         serializer = UserProfileSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminCheckView(APIView):
+    """
+    GET /api/v1/auth/admin-check/
+    Protected endpoint requiring IsAdminRole permission.
+    Used for RBAC verification and admin status testing.
+    """
+    permission_classes = [IsAdminRole]
+
+    def get(self, request, *args, **kwargs):
+        return Response(
+            {
+                "message": "Admin authorization verified.",
+                "user": request.user.email,
+                "role": request.user.role
+            },
+            status=status.HTTP_200_OK
+        )
