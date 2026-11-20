@@ -4,6 +4,7 @@ from django.db.utils import IntegrityError
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 User = get_user_model()
 
@@ -85,6 +86,10 @@ class AuthAPITests(APITestCase):
     def setUp(self):
         self.register_url = reverse('auth_register')
         self.login_url = reverse('auth_login')
+        self.refresh_url = reverse('auth_refresh')
+        self.logout_url = reverse('auth_logout')
+        self.me_url = reverse('auth_me')
+
         self.test_user = User.objects.create_user(
             email="existingstudent@example.com",
             password="SecurePassword123!",
@@ -168,3 +173,53 @@ class AuthAPITests(APITestCase):
         response = self.client.post(self.login_url, payload, format='json')
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn('error', response.data)
+
+    def test_token_refresh_lifecycle(self):
+        # 1. Login to obtain refresh token
+        login_resp = self.client.post(self.login_url, {
+            "email": "existingstudent@example.com",
+            "password": "SecurePassword123!"
+        }, format='json')
+        refresh_token = login_resp.data['tokens']['refresh']
+
+        # 2. Refresh access token
+        refresh_resp = self.client.post(self.refresh_url, {"refresh": refresh_token}, format='json')
+        self.assertEqual(refresh_resp.status_code, status.HTTP_200_OK)
+        self.assertIn('access', refresh_resp.data)
+
+        # 3. Invalid refresh token returns 401
+        invalid_resp = self.client.post(self.refresh_url, {"refresh": "invalid.fake.token"}, format='json')
+        self.assertEqual(invalid_resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_logout_blacklists_token(self):
+        # 1. Login
+        login_resp = self.client.post(self.login_url, {
+            "email": "existingstudent@example.com",
+            "password": "SecurePassword123!"
+        }, format='json')
+        access_token = login_resp.data['tokens']['access']
+        refresh_token = login_resp.data['tokens']['refresh']
+
+        # 2. Logout with authenticated client
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        logout_resp = self.client.post(self.logout_url, {"refresh": refresh_token}, format='json')
+        self.assertEqual(logout_resp.status_code, status.HTTP_200_OK)
+
+        # 3. Attempting to refresh using the blacklisted refresh token MUST fail
+        retry_refresh = self.client.post(self.refresh_url, {"refresh": refresh_token}, format='json')
+        self.assertEqual(retry_refresh.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_get_me_endpoint(self):
+        # Unauthenticated request -> 401
+        self.client.credentials()
+        unauth_resp = self.client.get(self.me_url)
+        self.assertEqual(unauth_resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # Authenticated request -> 200 with profile
+        refresh = RefreshToken.for_user(self.test_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        auth_resp = self.client.get(self.me_url)
+        self.assertEqual(auth_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(auth_resp.data['email'], "existingstudent@example.com")
+        self.assertEqual(auth_resp.data['full_name'], "Existing Student")
+        self.assertEqual(auth_resp.data['role'], "STUDENT")
