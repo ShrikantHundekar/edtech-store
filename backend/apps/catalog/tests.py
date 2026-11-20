@@ -3,6 +3,7 @@ import shutil
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.utils import IntegrityError
 from django.contrib.auth import get_user_model
@@ -464,5 +465,127 @@ class AdminMaterialUploadTests(APITestCase):
         response = self.client.post(url, {'file': pdf_file}, format='multipart')
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class FreeSampleChapterTests(APITestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(
+            email="admin_free_sample@test.com",
+            password="AdminPassword123!",
+            role="ADMIN"
+        )
+        self.student_user = User.objects.create_user(
+            email="student_free_sample@test.com",
+            password="StudentPassword123!",
+            role="STUDENT"
+        )
+        self.admin_token = str(RefreshToken.for_user(self.admin_user).access_token)
+        self.student_token = str(RefreshToken.for_user(self.student_user).access_token)
+
+        self.board = Board.objects.create(name="CBSE", slug="cbse")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.subject = Subject.objects.create(academic_class=self.academic_class, name="Biology", slug="biology")
+        self.chapter1 = Chapter.objects.create(
+            subject=self.subject,
+            chapter_number=1,
+            title="Life Processes",
+            slug="life-processes",
+            is_free_sample=True
+        )
+        self.chapter2 = Chapter.objects.create(
+            subject=self.subject,
+            chapter_number=2,
+            title="Control and Coordination",
+            slug="control-and-coordination",
+            is_free_sample=False
+        )
+
+    def test_model_level_enforces_single_free_sample_per_subject(self):
+        with self.assertRaises(ValidationError):
+            Chapter.objects.create(
+                subject=self.subject,
+                chapter_number=3,
+                title="How do Organisms Reproduce?",
+                slug="reproduction",
+                is_free_sample=True
+            )
+
+    def test_admin_create_rejects_second_free_sample_in_same_subject(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        response = self.client.post('/api/v1/admin/chapters/', {
+            "subject": self.subject.id,
+            "chapter_number": 3,
+            "title": "Heredity and Evolution",
+            "is_free_sample": True
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Only one chapter per subject can be marked as a free sample", str(response.data))
+
+    def test_admin_patch_rejects_second_free_sample_in_same_subject(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        response = self.client.patch(f'/api/v1/admin/chapters/{self.chapter2.id}/', {
+            "is_free_sample": True
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Only one chapter per subject can be marked as a free sample", str(response.data))
+
+    def test_admin_can_reassign_free_sample_after_unsetting_previous(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        
+        # 1. Unset chapter 1
+        resp1 = self.client.patch(f'/api/v1/admin/chapters/{self.chapter1.id}/', {
+            "is_free_sample": False
+        }, format='json')
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp1.data['is_free_sample'])
+
+        # 2. Set chapter 2 to free sample
+        resp2 = self.client.patch(f'/api/v1/admin/chapters/{self.chapter2.id}/', {
+            "is_free_sample": True
+        }, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp2.data['is_free_sample'])
+
+    def test_toggle_free_sample_action(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+
+        # Chapter 1 is currently free; toggle it to false
+        resp = self.client.post(f'/api/v1/admin/chapters/{self.chapter1.id}/toggle-free-sample/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp.data['is_free_sample'])
+
+        # Now chapter 2 can be toggled to true
+        resp2 = self.client.post(f'/api/v1/admin/chapters/{self.chapter2.id}/toggle-free-sample/')
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp2.data['is_free_sample'])
+
+        # Toggling chapter 1 back to true while chapter 2 is free should return 400
+        resp3 = self.client.post(f'/api/v1/admin/chapters/{self.chapter1.id}/toggle-free-sample/')
+        self.assertEqual(resp3.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Only one chapter per subject can be marked as a free sample", resp3.data['error'])
+
+    def test_public_catalog_endpoints_return_free_sample_flag(self):
+        # 1. Subject chapters list endpoint
+        resp_list = self.client.get(f'/api/v1/catalog/subjects/{self.subject.id}/chapters/')
+        self.assertEqual(resp_list.status_code, status.HTTP_200_OK)
+        chapters = {c['id']: c for c in resp_list.data}
+        self.assertTrue(chapters[self.chapter1.id]['is_free_sample'])
+        self.assertFalse(chapters[self.chapter2.id]['is_free_sample'])
+
+        # 2. Chapter detail endpoint
+        resp_detail = self.client.get(f'/api/v1/catalog/chapters/{self.chapter1.id}/')
+        self.assertEqual(resp_detail.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp_detail.data['is_free_sample'])
+        self.assertEqual(resp_detail.data['title'], "Life Processes")
+
+        # 3. Catalog search endpoint
+        resp_search = self.client.get('/api/v1/catalog/search/?q=Processes')
+        self.assertEqual(resp_search.status_code, status.HTTP_200_OK)
+        found = next((ch for ch in resp_search.data['chapters'] if ch['id'] == self.chapter1.id), None)
+        self.assertIsNotNone(found)
+        self.assertTrue(found['is_free_sample'])
+
 
 

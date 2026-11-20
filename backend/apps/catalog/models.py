@@ -108,6 +108,22 @@ class Chapter(models.Model):
         verbose_name = 'Chapter'
         verbose_name_plural = 'Chapters'
 
+    def clean(self):
+        super().clean()
+        if self.is_free_sample and getattr(self, 'subject_id', None):
+            qs = Chapter.objects.filter(subject_id=self.subject_id, is_free_sample=True)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                from django.core.exceptions import ValidationError
+                raise ValidationError({
+                    'is_free_sample': 'Only one chapter per subject can be marked as a free sample.'
+                })
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.subject.name} - Ch {self.chapter_number}: {self.title}"
 

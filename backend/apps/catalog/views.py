@@ -153,6 +153,46 @@ class AdminChapterViewSet(viewsets.ModelViewSet):
         serializer = MaterialSerializer(material)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='toggle-free-sample',
+        permission_classes=[IsAdminRole],
+    )
+    def toggle_free_sample(self, request, pk=None):
+        """
+        POST /api/v1/admin/chapters/{id}/toggle-free-sample/
+        Toggles or sets the is_free_sample flag.
+        Optional JSON body: {"is_free_sample": true/false}
+        Enforces max 1 free sample chapter per subject.
+        """
+        chapter = self.get_object()
+        desired_state = request.data.get('is_free_sample')
+        if desired_state is None:
+            new_state = not chapter.is_free_sample
+        else:
+            new_state = bool(desired_state)
+
+        if new_state:
+            other_free = Chapter.objects.filter(
+                subject=chapter.subject,
+                is_free_sample=True
+            ).exclude(pk=chapter.pk).first()
+
+            if other_free:
+                return Response(
+                    {
+                        'error': f'Subject already has a free sample chapter: "{other_free.title}" (Ch {other_free.chapter_number}). Only one chapter per subject can be marked as a free sample.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        chapter.is_free_sample = new_state
+        chapter.save(update_fields=['is_free_sample', 'updated_at'])
+        serializer = self.get_serializer(chapter)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 
 
 # =====================================================================
@@ -212,6 +252,20 @@ class PublicSubjectChaptersListView(generics.ListAPIView):
         subject_id = self.kwargs.get('subject_id')
         subject = get_object_or_404(Subject, id=subject_id)
         return subject.chapters.all().order_by('chapter_number')
+
+
+class PublicChapterDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/catalog/chapters/{chapter_id}/
+    Returns details for a chapter including is_free_sample flag.
+    Returns 404 if chapter does not exist.
+    """
+    queryset = Chapter.objects.all()
+    serializer_class = ChapterSerializer
+    permission_classes = [permissions.AllowAny]
+    lookup_field = 'id'
+    lookup_url_kwarg = 'chapter_id'
+
 
 
 class CatalogSearchView(APIView):

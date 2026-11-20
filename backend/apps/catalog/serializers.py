@@ -100,6 +100,23 @@ class ChapterSerializer(serializers.ModelSerializer):
             data['slug'] = slugify(data['title'])
         return super().to_internal_value(data)
 
+    def validate(self, attrs):
+        is_free = attrs.get('is_free_sample')
+        if is_free is None and self.instance:
+            is_free = self.instance.is_free_sample
+
+        subject = attrs.get('subject') or (self.instance.subject if self.instance else None)
+
+        if is_free and subject:
+            qs = Chapter.objects.filter(subject=subject, is_free_sample=True)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError({
+                    'is_free_sample': 'Only one chapter per subject can be marked as a free sample.'
+                })
+        return super().validate(attrs)
+
 
 class MaterialSerializer(serializers.ModelSerializer):
     chapter_title = serializers.CharField(source='chapter.title', read_only=True)
