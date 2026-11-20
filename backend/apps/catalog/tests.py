@@ -854,6 +854,22 @@ class ProtectedPDFStreamingTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         self.assertIn("could not be found on the storage server", resp.data['error'])
 
+    def test_direct_static_url_access_to_notes_is_forbidden(self):
+        # Directly requesting /media/notes/... returns HTTP 403 Forbidden
+        resp_notes = self.client.get('/media/notes/chapter1.pdf')
+        self.assertEqual(resp_notes.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Direct static URL access to study notes is disallowed", resp_notes.json()['error'])
+
+        # Directly requesting /media/materials/... returns HTTP 403 Forbidden
+        resp_mats = self.client.get('/media/materials/chemical_reactions.pdf')
+        self.assertEqual(resp_mats.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Direct static URL access to study notes is disallowed", resp_mats.json()['error'])
+
+        # Directly requesting /protected_media/... returns HTTP 403 Forbidden
+        resp_protected = self.client.get('/protected_media/materials/uuid.pdf')
+        self.assertEqual(resp_protected.status_code, status.HTTP_403_FORBIDDEN)
+
+
 
 
 

@@ -16,6 +16,21 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.http import JsonResponse
+
+
+def block_direct_media_access(request, *args, **kwargs):
+    """
+    Explicit security barrier: disallows direct static file fetching of study materials.
+    All notes must be streamed via /api/v1/materials/{id}/stream/ after entitlement validation.
+    """
+    return JsonResponse(
+        {
+            "error": "Forbidden: Direct static URL access to study notes is disallowed. Please use the authorized streaming endpoint: /api/v1/materials/{id}/stream/"
+        },
+        status=403
+    )
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -23,4 +38,8 @@ urlpatterns = [
     path('api/v1/admin/', include('apps.catalog.admin_urls')),
     path('api/v1/catalog/', include('apps.catalog.public_urls')),
     path('api/v1/materials/', include('apps.catalog.material_urls')),
+    # Explicit security barriers: Restrict raw direct access to notes
+    path('media/notes/<path:path>', block_direct_media_access, name='block_direct_media_notes'),
+    path('media/materials/<path:path>', block_direct_media_access, name='block_direct_media_materials'),
+    path('protected_media/<path:path>', block_direct_media_access, name='block_direct_protected_media'),
 ]
