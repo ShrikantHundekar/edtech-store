@@ -4,6 +4,7 @@ from .views import (
     PublicBoardClassesListView,
     PublicClassSubjectsListView,
     PublicSubjectChaptersListView,
+    CatalogSearchView,
 )
 
 urlpatterns = [
@@ -11,4 +12,5 @@ urlpatterns = [
     path('boards/<int:board_id>/classes/', PublicBoardClassesListView.as_view(), name='public_catalog_board_classes'),
     path('classes/<int:class_id>/subjects/', PublicClassSubjectsListView.as_view(), name='public_catalog_class_subjects'),
     path('subjects/<int:subject_id>/chapters/', PublicSubjectChaptersListView.as_view(), name='public_catalog_subject_chapters'),
+    path('search/', CatalogSearchView.as_view(), name='public_catalog_search'),
 ]

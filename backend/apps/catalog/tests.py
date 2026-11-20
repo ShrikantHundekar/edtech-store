@@ -281,3 +281,53 @@ class PublicCatalogAPITests(APITestCase):
         # 404 for non-existent subject
         resp_404 = self.client.get('/api/v1/catalog/subjects/99999/chapters/')
         self.assertEqual(resp_404.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_search_by_chapter_title_returns_breadcrumbs(self):
+        # Search for 'Real' (matches Chapter: Real Numbers)
+        response = self.client.get('/api/v1/catalog/search/?q=Real')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.data['total_count'], 1)
+        self.assertEqual(len(response.data['chapters']), 1)
+        
+        chapter_res = response.data['chapters'][0]
+        self.assertEqual(chapter_res['title'], "Real Numbers")
+        self.assertEqual(chapter_res['breadcrumbs']['board']['name'], "CBSE")
+        self.assertEqual(chapter_res['breadcrumbs']['class']['name'], "Class 10")
+        self.assertEqual(chapter_res['breadcrumbs']['subject']['name'], "Mathematics")
+        self.assertEqual(chapter_res['breadcrumb_trail'], "CBSE > Class 10 > Mathematics")
+
+    def test_search_by_subject_name_returns_breadcrumbs(self):
+        # Search for 'Math' (matches Subject: Mathematics)
+        response = self.client.get('/api/v1/catalog/search/?q=math')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.data['total_count'], 1)
+        self.assertEqual(len(response.data['subjects']), 1)
+        
+        subject_res = response.data['subjects'][0]
+        self.assertEqual(subject_res['name'], "Mathematics")
+        self.assertEqual(subject_res['breadcrumbs']['board']['name'], "CBSE")
+        self.assertEqual(subject_res['breadcrumbs']['class']['name'], "Class 10")
+        self.assertEqual(subject_res['breadcrumb_trail'], "CBSE > Class 10")
+
+    def test_search_case_insensitive(self):
+        resp_upper = self.client.get('/api/v1/catalog/search/?q=POLYNOMIALS')
+        resp_lower = self.client.get('/api/v1/catalog/search/?q=polynomials')
+        self.assertEqual(resp_upper.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_lower.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp_upper.data['chapters']), 1)
+        self.assertEqual(len(resp_lower.data['chapters']), 1)
+        self.assertEqual(resp_upper.data['chapters'][0]['title'], resp_lower.data['chapters'][0]['title'])
+
+    def test_search_empty_and_no_match(self):
+        # Empty query
+        resp_empty = self.client.get('/api/v1/catalog/search/')
+        self.assertEqual(resp_empty.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_empty.data['total_count'], 0)
+        self.assertEqual(len(resp_empty.data['subjects']), 0)
+        self.assertEqual(len(resp_empty.data['chapters']), 0)
+
+        # No match query
+        resp_no_match = self.client.get('/api/v1/catalog/search/?q=QuantumMechanics404')
+        self.assertEqual(resp_no_match.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_no_match.data['total_count'], 0)
+
