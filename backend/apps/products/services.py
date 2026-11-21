@@ -229,6 +229,13 @@ def calculate_subject_pack_upgrade_credit(user, product) -> dict:
     base_price = product.current_price_paise
 
     if product.product_type != Product.PRODUCT_TYPE_SUBJECT_PACK:
+        pass_renewal = None
+        if product.product_type in (Product.PRODUCT_TYPE_MONTHLY_PASS, Product.PRODUCT_TYPE_ANNUAL_PASS):
+            from apps.entitlements.services import calculate_pass_validity_window
+            duration_days = product.pass_duration_days or 30
+            if product.academic_class_id:
+                pass_renewal = calculate_pass_validity_window(user, product.academic_class_id, duration_days)
+
         return {
             "product_id": product.id,
             "title": product.title,
@@ -241,6 +248,7 @@ def calculate_subject_pack_upgrade_credit(user, product) -> dict:
             "payable_price_inr": base_price / 100.0,
             "owned_chapters_count": 0,
             "owned_chapters": [],
+            "renewal_preview": pass_renewal,
             "gst_breakdown": calculate_gst_breakdown(base_price),
         }
 

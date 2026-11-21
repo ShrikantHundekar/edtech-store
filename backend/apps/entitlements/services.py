@@ -81,15 +81,18 @@ def calculate_pass_validity_window(user, class_id: int, duration_days: int) -> d
     if active_pass:
         base_time = active_pass.valid_until
         is_renewal = True
-        valid_from = now  # or active_pass.valid_from
+        valid_from = now
         valid_until = base_time + timedelta(days=duration_days)
-        remaining_days = max(0, (active_pass.valid_until - now).days)
+        remaining_seconds = (active_pass.valid_until - now).total_seconds()
+        remaining_days = max(0, round(remaining_seconds / 86400))
+        existing_expiry = active_pass.valid_until
     else:
         base_time = now
         is_renewal = False
         valid_from = now
         valid_until = valid_from + timedelta(days=duration_days)
         remaining_days = 0
+        existing_expiry = None
 
     return {
         "class_id": class_id,
@@ -98,6 +101,7 @@ def calculate_pass_validity_window(user, class_id: int, duration_days: int) -> d
         "base_time": base_time,
         "valid_from": valid_from,
         "valid_until": valid_until,
+        "existing_valid_until": existing_expiry,
         "remaining_active_days": remaining_days,
     }
 

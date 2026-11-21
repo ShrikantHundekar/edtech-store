@@ -99,17 +99,22 @@ class ProductOwnershipView(APIView):
         user = request.user if request.user.is_authenticated else None
         can_purchase, purchase_state, reason = check_product_purchase_eligibility(user, product)
 
-        return Response(
-            {
-                "product_id": product.id,
-                "title": product.title,
-                "product_type": product.product_type,
-                "purchase_state": purchase_state,
-                "can_purchase": can_purchase,
-                "reason": reason,
-            },
-            status=status.HTTP_200_OK
-        )
+        payload = {
+            "product_id": product.id,
+            "title": product.title,
+            "product_type": product.product_type,
+            "purchase_state": purchase_state,
+            "can_purchase": can_purchase,
+            "reason": reason,
+        }
+
+        if product.product_type in (Product.PRODUCT_TYPE_MONTHLY_PASS, Product.PRODUCT_TYPE_ANNUAL_PASS):
+            from apps.entitlements.services import calculate_pass_validity_window
+            duration_days = product.pass_duration_days or 30
+            if product.academic_class_id:
+                payload["renewal_preview"] = calculate_pass_validity_window(user, product.academic_class_id, duration_days)
+
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class CartValidateEligibilityView(APIView):

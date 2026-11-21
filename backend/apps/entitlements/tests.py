@@ -190,3 +190,92 @@ class TimeBoundPassValidityTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
         resp = self.client.get(f'/api/v1/materials/{self.mat_math_10.id}/stream/')
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_early_pass_renewal_stacks_from_existing_expiry_date(self):
+        # 1. Existing active pass expiring in 15 days
+        existing_expiry = timezone.now() + timedelta(days=15)
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=self.class_10.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=15),
+            valid_until=existing_expiry,
+            status='ACTIVE'
+        )
+
+        # 2. Preview 30-day renewal
+        window = calculate_pass_validity_window(self.user, self.class_10.id, duration_days=30)
+        self.assertTrue(window["is_renewal"])
+        self.assertEqual(window["base_time"], existing_expiry)
+        # new_valid_until = existing_valid_until + 30 days
+        self.assertEqual(window["valid_until"], existing_expiry + timedelta(days=30))
+        self.assertEqual(window["remaining_active_days"], 15)
+
+        # 3. Provision renewal
+        renewal_ent = provision_class_pass_entitlement(self.user, self.class_10.id, duration_days=30)
+        self.assertEqual(renewal_ent.valid_until, existing_expiry + timedelta(days=30))
+        # Total days of access is now 45 days (15 remaining + 30 new)
+        total_days = round((renewal_ent.valid_until - timezone.now()).total_seconds() / 86400)
+        self.assertEqual(total_days, 45)
+
+    def test_multiple_consecutive_pass_renewals_stack(self):
+        # First purchase (30 days)
+        pass1 = provision_class_pass_entitlement(self.user, self.class_10.id, duration_days=30)
+        self.assertEqual(round((pass1.valid_until - timezone.now()).total_seconds() / 86400), 30)
+
+        # Second purchase (another 30 days stacked on top of first)
+        pass2 = provision_class_pass_entitlement(self.user, self.class_10.id, duration_days=30)
+        self.assertEqual(pass2.valid_until, pass1.valid_until + timedelta(days=30))
+        self.assertEqual(round((pass2.valid_until - timezone.now()).total_seconds() / 86400), 60)
+
+        # Third purchase (Annual 365 days stacked on top of second)
+        pass3 = provision_class_pass_entitlement(self.user, self.class_10.id, duration_days=365)
+        self.assertEqual(pass3.valid_until, pass2.valid_until + timedelta(days=365))
+        self.assertEqual(round((pass3.valid_until - timezone.now()).total_seconds() / 86400), 425)
+
+    def test_expired_pass_does_not_stack_from_past(self):
+        # Pass expired 10 days ago
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=self.class_10.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=40),
+            valid_until=timezone.now() - timedelta(days=10),
+            status='ACTIVE'
+        )
+
+        # New purchase should start from NOW, not from 10 days ago
+        window = calculate_pass_validity_window(self.user, self.class_10.id, duration_days=30)
+        self.assertFalse(window["is_renewal"])
+        days_from_now = round((window["valid_until"] - timezone.now()).total_seconds() / 86400)
+        self.assertEqual(days_from_now, 30)
+
+    def test_api_renewal_preview(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Create active pass with 10 days left
+        existing_expiry = timezone.now() + timedelta(days=10)
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=self.class_10.id,
+            access_type='TIME_BOUND',
+            valid_from=timezone.now() - timedelta(days=20),
+            valid_until=existing_expiry,
+            status='ACTIVE'
+        )
+
+        # Check ownership endpoint
+        resp_own = self.client.get(f'/api/v1/products/{self.monthly_pass.id}/ownership/')
+        self.assertEqual(resp_own.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp_own.data['can_purchase'])
+        self.assertTrue(resp_own.data['renewal_preview']['is_renewal'])
+        self.assertEqual(resp_own.data['renewal_preview']['remaining_active_days'], 10)
+
+        # Check calculate-price endpoint
+        resp_calc = self.client.get(f'/api/v1/products/{self.monthly_pass.id}/calculate-price/')
+        self.assertEqual(resp_calc.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp_calc.data['renewal_preview']['is_renewal'])
+
