@@ -9,6 +9,7 @@ from apps.catalog.models import Board, ClassLevel, Subject, Chapter
 from apps.products.models import Product, Price
 from .models import Order, OrderItem, Coupon
 from .services import redeem_coupon, validate_and_apply_coupon
+from .gst import calculate_inclusive_gst, calculate_gst_breakdown
 
 User = get_user_model()
 
@@ -376,5 +377,107 @@ class CouponApplyAPITests(APITestCase):
         # Redeem again
         updated_coupon = redeem_coupon(self.flat_coupon.id)
         self.assertEqual(updated_coupon.times_used, 2)
+
+
+class GSTTaxSplitEngineTests(TestCase):
+    def test_gst_breakdown_zero_or_negative_price(self):
+        res = calculate_inclusive_gst(0)
+        self.assertEqual(res['price_inclusive_paise'], 0)
+        self.assertEqual(res['base_taxable_paise'], 0)
+        self.assertEqual(res['total_gst_paise'], 0)
+        self.assertEqual(res['cgst_paise'], 0)
+        self.assertEqual(res['sgst_paise'], 0)
+
+        res_neg = calculate_inclusive_gst(-500)
+        self.assertEqual(res_neg['price_inclusive_paise'], 0)
+        self.assertEqual(res_neg['base_taxable_paise'], 0)
+
+    def test_gst_breakdown_chapter_notes_49_inr(self):
+        """
+        Chapter notes ₹49.00 (4900 paise):
+        Base Taxable = round(4900 / 1.18) = 4153 paise
+        Total GST = 4900 - 4153 = 747 paise
+        CGST = round(747 / 2) = 374 paise
+        SGST = 747 - 374 = 373 paise
+        """
+        res = calculate_inclusive_gst(4900)
+        self.assertEqual(res['price_inclusive_paise'], 4900)
+        self.assertEqual(res['base_taxable_paise'], 4153)
+        self.assertEqual(res['total_gst_paise'], 747)
+        self.assertEqual(res['cgst_paise'], 374)
+        self.assertEqual(res['sgst_paise'], 373)
+        self.assertEqual(res['base_taxable_paise'] + res['total_gst_paise'], 4900)
+        self.assertEqual(res['cgst_paise'] + res['sgst_paise'], 747)
+        self.assertEqual(res['price_inclusive_inr'], 49.00)
+        self.assertEqual(res['base_taxable_inr'], 41.53)
+        self.assertEqual(res['total_gst_inr'], 7.47)
+        self.assertEqual(res['cgst_inr'], 3.74)
+        self.assertEqual(res['sgst_inr'], 3.73)
+
+    def test_gst_breakdown_subject_pack_499_inr(self):
+        """
+        US-CART-03: Given ₹499.00 (49,900 paise):
+        Base Taxable = round(49900 / 1.18) = 42288 paise (₹422.88)
+        Total GST = 49900 - 42288 = 7612 paise (₹76.12)
+        CGST (9%) = 3806 paise (₹38.06)
+        SGST (9%) = 3806 paise (₹38.06)
+        """
+        res = calculate_inclusive_gst(49900)
+        self.assertEqual(res['price_inclusive_paise'], 49900)
+        self.assertEqual(res['base_taxable_paise'], 42288)
+        self.assertEqual(res['total_gst_paise'], 7612)
+        self.assertEqual(res['cgst_paise'], 3806)
+        self.assertEqual(res['sgst_paise'], 3806)
+        self.assertEqual(res['base_taxable_paise'] + res['total_gst_paise'], 49900)
+        self.assertEqual(res['cgst_paise'] + res['sgst_paise'], 7612)
+        self.assertEqual(res['base_taxable_inr'], 422.88)
+        self.assertEqual(res['total_gst_inr'], 76.12)
+        self.assertEqual(res['cgst_inr'], 38.06)
+        self.assertEqual(res['sgst_inr'], 38.06)
+
+    def test_gst_breakdown_interstate_igst(self):
+        """
+        Inter-state transaction applies 18% IGST with CGST=0 and SGST=0.
+        """
+        res = calculate_inclusive_gst(49900, is_interstate=True)
+        self.assertEqual(res['price_inclusive_paise'], 49900)
+        self.assertEqual(res['base_taxable_paise'], 42288)
+        self.assertEqual(res['total_gst_paise'], 7612)
+        self.assertEqual(res['igst_paise'], 7612)
+        self.assertEqual(res['cgst_paise'], 0)
+        self.assertEqual(res['sgst_paise'], 0)
+        self.assertTrue(res['is_interstate'])
+
+    def test_zero_rounding_leakage_across_large_price_spectrum(self):
+        """
+        Mathematical Invariant Acceptance Test:
+        Validates that for all integer price points from 1 to 10,000 paise (and large sample points up to 10,000,000 paise):
+        1. base_taxable_paise + total_gst_paise == price_inclusive_paise
+        2. cgst_paise + sgst_paise == total_gst_paise
+        3. All amounts are non-negative.
+        """
+        test_prices = list(range(1, 10001)) + [
+            49900, 99900, 149900, 199900, 249900, 499900, 999900, 10000000
+        ]
+        for price in test_prices:
+            res = calculate_inclusive_gst(price)
+            # Invariant 1: Zero leakage between base taxable and total GST
+            self.assertEqual(
+                res['base_taxable_paise'] + res['total_gst_paise'],
+                price,
+                f"GST leakage found for price {price} paise!"
+            )
+            # Invariant 2: Zero leakage between CGST + SGST and Total GST
+            self.assertEqual(
+                res['cgst_paise'] + res['sgst_paise'],
+                res['total_gst_paise'],
+                f"Tax split leakage found for price {price} paise!"
+            )
+            # Invariant 3: Non-negativity
+            self.assertGreaterEqual(res['base_taxable_paise'], 0)
+            self.assertGreaterEqual(res['total_gst_paise'], 0)
+            self.assertGreaterEqual(res['cgst_paise'], 0)
+            self.assertGreaterEqual(res['sgst_paise'], 0)
+
 
 

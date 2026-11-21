@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
-from apps.products.services import calculate_gst_breakdown
+from .gst import calculate_gst_breakdown
 from .models import Coupon
 
 
