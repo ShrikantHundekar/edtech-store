@@ -1,3 +1,4 @@
+from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Q
 from .models import Entitlement
@@ -55,3 +56,68 @@ def has_access_to_material(user, material) -> bool:
     if not material:
         return False
     return has_access_to_chapter(user, material.chapter)
+
+
+def calculate_pass_validity_window(user, class_id: int, duration_days: int) -> dict:
+    """
+    Calculates time-bound validity window for a class pass (e.g. 30 days or 365 days).
+    Standard activation:
+      If no active pass: valid_until = now() + duration_days
+    Early renewal (Pass Stacking):
+      If an active pass exists: new_valid_until = existing_valid_until + duration_days
+    """
+    now = timezone.now()
+    active_pass = None
+
+    if user and user.is_authenticated:
+        active_pass = Entitlement.objects.filter(
+            user=user,
+            product_type='CLASS_PASS',
+            scope_id=class_id,
+            status='ACTIVE',
+            valid_until__gt=now
+        ).order_by('-valid_until').first()
+
+    if active_pass:
+        base_time = active_pass.valid_until
+        is_renewal = True
+        valid_from = now  # or active_pass.valid_from
+        valid_until = base_time + timedelta(days=duration_days)
+        remaining_days = max(0, (active_pass.valid_until - now).days)
+    else:
+        base_time = now
+        is_renewal = False
+        valid_from = now
+        valid_until = valid_from + timedelta(days=duration_days)
+        remaining_days = 0
+
+    return {
+        "class_id": class_id,
+        "duration_days": duration_days,
+        "is_renewal": is_renewal,
+        "base_time": base_time,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "remaining_active_days": remaining_days,
+    }
+
+
+def provision_class_pass_entitlement(user, class_id: int, duration_days: int, order=None) -> Entitlement:
+    """
+    Provisions or extends an active time-bound Class Pass entitlement for a student.
+    Sets valid_until based on early renewal stacking if a previous active pass exists.
+    """
+    window = calculate_pass_validity_window(user, class_id, duration_days)
+
+    entitlement = Entitlement.objects.create(
+        user=user,
+        product_type='CLASS_PASS',
+        scope_id=class_id,
+        access_type='TIME_BOUND',
+        valid_from=window["valid_from"],
+        valid_until=window["valid_until"],
+        status='ACTIVE',
+        order=order
+    )
+    return entitlement
+

@@ -117,6 +117,15 @@ class Product(models.Model):
         return "Lifetime"
 
     @property
+    def pass_duration_days(self) -> int | None:
+        """Returns duration in days for time-bound passes (30 for monthly, 365 for annual)."""
+        if self.product_type == self.PRODUCT_TYPE_MONTHLY_PASS:
+            return 30
+        elif self.product_type == self.PRODUCT_TYPE_ANNUAL_PASS:
+            return 365
+        return None
+
+    @property
     def gst_breakdown(self) -> dict:
         """Returns the 18% inclusive GST calculation dictionary."""
         from .services import calculate_gst_breakdown
