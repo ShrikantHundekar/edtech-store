@@ -779,11 +779,7 @@ class MultiItemCartPriceRecalculationTests(APITestCase):
             password="StrongPassword123!",
             role="STUDENT"
         )
-        token_resp = self.client.post('/api/v1/auth/login/', {
-            "email": "cartstudent@example.com",
-            "password": "StrongPassword123!"
-        })
-        self.token = token_resp.data['tokens']['access']
+        self.token = str(RefreshToken.for_user(self.user).access_token)
 
     def test_cart_validation_completely_ignores_client_submitted_prices(self):
         """

@@ -2,9 +2,13 @@ from datetime import timedelta
 from django.test import TestCase
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from rest_framework import status
+from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 from apps.catalog.models import Board, ClassLevel, Subject, Chapter
 from apps.products.models import Product, Price
 from .models import Order, OrderItem, Coupon
+from .services import redeem_coupon, validate_and_apply_coupon
 
 User = get_user_model()
 
@@ -207,4 +211,170 @@ class CouponModelTests(TestCase):
         self.assertFalse(is_valid)
         self.assertIn("not yet valid", error)
         self.assertEqual(discount, 0)
+
+
+class CouponApplyAPITests(APITestCase):
+    def setUp(self):
+        self.now = timezone.now()
+        self.user = User.objects.create_user(
+            email="coupon_student@example.com",
+            password="StrongPassword123!",
+            role="STUDENT"
+        )
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+
+        self.board = Board.objects.create(name="CBSE Coupon", slug="cbse-coupon")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10-coupon")
+        self.subject = Subject.objects.create(academic_class=self.academic_class, name="Math", slug="math-coupon")
+        self.chapter = Chapter.objects.create(subject=self.subject, chapter_number=1, title="Real Numbers")
+        self.product = Product.objects.create(
+            title="Class 10 Math Chapter 1",
+            slug="ch1-coupon",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.chapter
+        )
+        Price.objects.create(product=self.product, amount_paise=4900, is_current=True)
+
+        self.flat_coupon = Coupon.objects.create(
+            code="DISCOUNT50",
+            discount_type=Coupon.DISCOUNT_TYPE_FLAT,
+            discount_value=5000,  # ₹50 = 5000 paise
+            min_order_paise=10000,  # ₹100
+            usage_limit=10,
+            times_used=0,
+            valid_from=self.now - timedelta(days=1),
+            valid_until=self.now + timedelta(days=30),
+            is_active=True
+        )
+
+        self.percent_coupon = Coupon.objects.create(
+            code="SAVE10",
+            discount_type=Coupon.DISCOUNT_TYPE_PERCENTAGE,
+            discount_value=10,  # 10%
+            min_order_paise=0,
+            max_discount_paise=2000,  # Max ₹20
+            usage_limit=10,
+            times_used=0,
+            valid_from=self.now - timedelta(days=1),
+            valid_until=self.now + timedelta(days=30),
+            is_active=True
+        )
+
+        self.expired_coupon = Coupon.objects.create(
+            code="EXPIRED20",
+            discount_type=Coupon.DISCOUNT_TYPE_FLAT,
+            discount_value=2000,
+            valid_from=self.now - timedelta(days=10),
+            valid_until=self.now - timedelta(days=1),
+            is_active=True
+        )
+
+        self.exhausted_coupon = Coupon.objects.create(
+            code="MAXEDOUT",
+            discount_type=Coupon.DISCOUNT_TYPE_FLAT,
+            discount_value=2000,
+            usage_limit=5,
+            times_used=5,
+            valid_from=self.now - timedelta(days=1),
+            valid_until=self.now + timedelta(days=10),
+            is_active=True
+        )
+
+    def test_apply_flat_coupon_success(self):
+        """
+        US-CART-02: Given an active coupon with code DISCOUNT50 (flat ₹50 off),
+        When applied to a cart with subtotal ₹200 (20000 paise),
+        Then the cart total becomes ₹150 (15000 paise).
+        """
+        payload = {
+            "code": "DISCOUNT50",
+            "cart_subtotal_paise": 20000
+        }
+        resp = self.client.post('/api/v1/coupons/apply/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        self.assertTrue(data['valid'])
+        self.assertEqual(data['subtotal_paise'], 20000)
+        self.assertEqual(data['subtotal_inr'], 200.0)
+        self.assertEqual(data['discount_paise'], 5000)
+        self.assertEqual(data['discount_inr'], 50.0)
+        self.assertEqual(data['net_payable_paise'], 15000)
+        self.assertEqual(data['net_payable_inr'], 150.0)
+        self.assertEqual(data['gst_breakdown']['price_inclusive_paise'], 15000)
+
+    def test_apply_percentage_coupon_success_with_cap(self):
+        # 10% of ₹300 (30000 paise) = 3000 paise -> capped at max_discount_paise (2000 paise = ₹20)
+        payload = {
+            "code": "SAVE10",
+            "cart_subtotal_paise": 30000
+        }
+        resp = self.client.post('/api/v1/coupons/apply/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        self.assertTrue(data['valid'])
+        self.assertEqual(data['discount_paise'], 2000)
+        self.assertEqual(data['net_payable_paise'], 28000)
+
+    def test_apply_coupon_with_cart_items_payload(self):
+        # Server recalculates subtotal from items (4900 paise)
+        # DISCOUNT50 requires min order ₹100 (10000 paise), so 4900 is rejected
+        payload = {
+            "code": "DISCOUNT50",
+            "items": [{"product_id": self.product.id}]
+        }
+        resp = self.client.post('/api/v1/coupons/apply/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data['valid'])
+        self.assertIn("must be at least ₹100.00", resp.data['error'])
+
+    def test_apply_expired_coupon_rejected(self):
+        """
+        US-CART-02: Expired coupon returns HTTP 400 with specific error message.
+        """
+        payload = {
+            "code": "EXPIRED20",
+            "cart_subtotal_paise": 15000
+        }
+        resp = self.client.post('/api/v1/coupons/apply/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data['valid'])
+        self.assertIn("expired", resp.data['error'].lower())
+
+    def test_apply_usage_limit_exhausted_rejected(self):
+        """
+        US-CART-02: Exceeded usage limit returns HTTP 400 with specific error message.
+        """
+        payload = {
+            "code": "MAXEDOUT",
+            "cart_subtotal_paise": 15000
+        }
+        resp = self.client.post('/api/v1/coupons/apply/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data['valid'])
+        self.assertIn("usage limit", resp.data['error'].lower())
+
+    def test_apply_nonexistent_coupon_rejected(self):
+        payload = {
+            "code": "DOESNOTEXIST",
+            "cart_subtotal_paise": 15000
+        }
+        resp = self.client.post('/api/v1/coupons/apply/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data['valid'])
+        self.assertIn("Invalid coupon code", resp.data['error'])
+
+    def test_redeem_coupon_atomically_increments_times_used(self):
+        """
+        Criteria: Atomically increments times_used upon completed order.
+        """
+        self.assertEqual(self.flat_coupon.times_used, 0)
+        updated_coupon = redeem_coupon(self.flat_coupon)
+        self.assertEqual(updated_coupon.times_used, 1)
+
+        # Redeem again
+        updated_coupon = redeem_coupon(self.flat_coupon.id)
+        self.assertEqual(updated_coupon.times_used, 2)
+
 
