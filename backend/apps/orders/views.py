@@ -1,9 +1,13 @@
-from rest_framework import status, permissions
+from rest_framework import status, permissions, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
+from django.shortcuts import get_object_or_404
 from apps.products.models import Product
 from apps.products.services import recalculate_cart_pricing
-from .services import validate_and_apply_coupon
+from .models import Order
+from .serializers import OrderSerializer
+from .services import validate_and_apply_coupon, create_order
 
 
 class CouponApplyView(APIView):
@@ -69,3 +73,63 @@ class CouponApplyView(APIView):
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class OrderCreateView(APIView):
+    """
+    POST /api/v1/orders/create/
+    Server-authoritative Order creation endpoint:
+    - Strictly rejects untrusted client prices; recalculates everything from the database.
+    - Validates cart items against user ownership and overlapping purchase rules.
+    - Applies upgrade credit for Subject Packs based on user's past purchases.
+    - Validates promotional coupon against the recalculation subtotal.
+    - Computes 18% inclusive GST split (base taxable + GST amount).
+    - Initializes the Order record with status 'PENDING'.
+    - Creates corresponding itemized OrderItem snapshots.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        raw_items = request.data.get('items', [])
+        coupon_code = request.data.get('coupon_code') or request.data.get('coupon')
+
+        try:
+            order = create_order(request.user, raw_items, coupon_code=coupon_code)
+        except ValidationError as err:
+            return Response(err.detail, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as err:
+            return Response({"error": str(err)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = OrderSerializer(order)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class OrderListView(generics.ListAPIView):
+    """
+    GET /api/v1/orders/
+    Returns list of orders for the authenticated student.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = OrderSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if getattr(user, 'role', None) == 'ADMIN' or user.is_staff or user.is_superuser:
+            return Order.objects.all().select_related('user', 'coupon').prefetch_related('items__product')
+        return Order.objects.filter(user=user).select_related('coupon').prefetch_related('items__product')
+
+
+class OrderDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/orders/{id}/
+    Returns details of a specific order.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = OrderSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if getattr(user, 'role', None) == 'ADMIN' or user.is_staff or user.is_superuser:
+            return Order.objects.all().select_related('user', 'coupon').prefetch_related('items__product')
+        return Order.objects.filter(user=user).select_related('coupon').prefetch_related('items__product')
+

@@ -7,8 +7,9 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.catalog.models import Board, ClassLevel, Subject, Chapter
 from apps.products.models import Product, Price
+from apps.entitlements.models import Entitlement
 from .models import Order, OrderItem, Coupon
-from .services import redeem_coupon, validate_and_apply_coupon
+from .services import redeem_coupon, validate_and_apply_coupon, create_order
 from .gst import calculate_inclusive_gst, calculate_gst_breakdown
 
 User = get_user_model()
@@ -478,6 +479,207 @@ class GSTTaxSplitEngineTests(TestCase):
             self.assertGreaterEqual(res['total_gst_paise'], 0)
             self.assertGreaterEqual(res['cgst_paise'], 0)
             self.assertGreaterEqual(res['sgst_paise'], 0)
+
+
+class OrderCreateAPITests(APITestCase):
+    def setUp(self):
+        self.now = timezone.now()
+        self.student = User.objects.create_user(
+            email="order_student@example.com",
+            password="StrongPassword123!",
+            role="STUDENT"
+        )
+        self.token = str(RefreshToken.for_user(self.student).access_token)
+
+        self.board = Board.objects.create(name="CBSE Order", slug="cbse-order")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10-order")
+        self.subject = Subject.objects.create(academic_class=self.academic_class, name="Mathematics", slug="math-order")
+        self.ch1 = Chapter.objects.create(subject=self.subject, chapter_number=1, title="Real Numbers", slug="real-numbers-order")
+        self.ch2 = Chapter.objects.create(subject=self.subject, chapter_number=2, title="Polynomials", slug="polynomials-order")
+
+        # Products
+        self.prod_ch1 = Product.objects.create(
+            title="Class 10 Math Chapter 1",
+            slug="math-ch-1",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.ch1,
+            is_active=True
+        )
+        Price.objects.create(product=self.prod_ch1, amount_paise=4900, is_current=True)
+
+        self.prod_ch2 = Product.objects.create(
+            title="Class 10 Math Chapter 2",
+            slug="math-ch-2",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.ch2,
+            is_active=True
+        )
+        Price.objects.create(product=self.prod_ch2, amount_paise=4900, is_current=True)
+
+        self.prod_math_pack = Product.objects.create(
+            title="Class 10 Math Subject Pack",
+            slug="math-subject-pack",
+            product_type=Product.PRODUCT_TYPE_SUBJECT_PACK,
+            subject=self.subject,
+            is_active=True
+        )
+        Price.objects.create(product=self.prod_math_pack, amount_paise=49900, is_current=True)
+
+        self.coupon = Coupon.objects.create(
+            code="ORDER50",
+            discount_type=Coupon.DISCOUNT_TYPE_FLAT,
+            discount_value=5000,  # ₹50 = 5000 paise
+            min_order_paise=5000,
+            valid_from=self.now - timedelta(days=1),
+            valid_until=self.now + timedelta(days=30),
+            is_active=True
+        )
+
+    def test_order_create_requires_authentication(self):
+        resp = self.client.post('/api/v1/orders/create/', {
+            "items": [{"product_id": self.prod_ch1.id}]
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_order_create_rejects_empty_cart(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        resp = self.client.post('/api/v1/orders/create/', {"items": []}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Cart is empty", str(resp.data))
+
+    def test_order_create_success_pending_status_and_items(self):
+        """
+        Criteria:
+        - Validates cart items, stores upgrade credits, coupon discount, and 18% GST split.
+        - Order initialized with status PENDING.
+        """
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        payload = {
+            "items": [
+                {"product_id": self.prod_ch1.id, "tampered_price": 10},
+                {"product_id": self.prod_ch2.id, "tampered_price": 20}
+            ]
+        }
+
+        resp = self.client.post('/api/v1/orders/create/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        data = resp.data
+
+        self.assertEqual(data['status'], Order.STATUS_PENDING)
+        self.assertTrue(data['order_number'].startswith("ORD-"))
+
+        # 2 chapters at ₹49.00 each = 9800 paise gross
+        self.assertEqual(data['gross_amount_paise'], 9800)
+        self.assertEqual(data['upgrade_discount_paise'], 0)
+        self.assertEqual(data['coupon_discount_paise'], 0)
+        self.assertEqual(data['net_payable_paise'], 9800)
+
+        # 18% GST split on 9800 paise:
+        # Base taxable = round(9800 / 1.18) = 8305 paise
+        # GST = 9800 - 8305 = 1495 paise
+        self.assertEqual(data['taxable_base_paise'], 8305)
+        self.assertEqual(data['gst_amount_paise'], 1495)
+        self.assertEqual(data['taxable_base_paise'] + data['gst_amount_paise'], 9800)
+
+        # Verify OrderItem records in database
+        order_db = Order.objects.get(id=data['id'])
+        self.assertEqual(order_db.status, Order.STATUS_PENDING)
+        self.assertEqual(order_db.items.count(), 2)
+
+        item_pids = set(order_db.items.values_list('product_id', flat=True))
+        self.assertEqual(item_pids, {self.prod_ch1.id, self.prod_ch2.id})
+        for it in order_db.items.all():
+            self.assertEqual(it.unit_price_paise, 4900)
+            self.assertEqual(it.net_price_paise, 4900)
+
+    def test_order_create_with_upgrade_credit_and_coupon(self):
+        """
+        Student owns Math Ch 1 (4900 credit towards Math Subject Pack 49900).
+        Cart has Math Subject Pack (49900 - 4900 = 45000 paise).
+        Coupon ORDER50 deducts 5000 paise -> net payable = 40000 paise.
+        """
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant ownership of Ch 1
+        Entitlement.objects.create(
+            user=self.student,
+            product_type='CHAPTER',
+            scope_id=self.ch1.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        payload = {
+            "items": [{"product_id": self.prod_math_pack.id}],
+            "coupon_code": "ORDER50"
+        }
+
+        resp = self.client.post('/api/v1/orders/create/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        data = resp.data
+
+        self.assertEqual(data['gross_amount_paise'], 49900)
+        self.assertEqual(data['upgrade_discount_paise'], 4900)
+        self.assertEqual(data['coupon_code'], "ORDER50")
+        self.assertEqual(data['coupon_discount_paise'], 5000)
+        self.assertEqual(data['net_payable_paise'], 40000)  # 49900 - 4900 - 5000 = 40000
+
+        # GST on 40000 paise:
+        # round(40000 / 1.18) = 33898 paise base
+        # GST = 40000 - 33898 = 6102 paise
+        self.assertEqual(data['taxable_base_paise'], 33898)
+        self.assertEqual(data['gst_amount_paise'], 6102)
+        self.assertEqual(data['taxable_base_paise'] + data['gst_amount_paise'], 40000)
+
+    def test_order_create_rejects_already_owned_item(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        Entitlement.objects.create(
+            user=self.student,
+            product_type='CHAPTER',
+            scope_id=self.ch1.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        resp = self.client.post('/api/v1/orders/create/', {
+            "items": [{"product_id": self.prod_ch1.id}]
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Owned", str(resp.data))
+
+    def test_order_create_rejects_invalid_coupon(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        resp = self.client.post('/api/v1/orders/create/', {
+            "items": [{"product_id": self.prod_ch1.id}],
+            "coupon_code": "NONEXISTENT"
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid coupon code", str(resp.data))
+
+    def test_order_list_and_detail_views(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Create order
+        create_resp = self.client.post('/api/v1/orders/create/', {
+            "items": [{"product_id": self.prod_ch1.id}]
+        }, format='json')
+        order_id = create_resp.data['id']
+
+        # List orders
+        list_resp = self.client.get('/api/v1/orders/')
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_resp.data), 1)
+        self.assertEqual(list_resp.data[0]['id'], order_id)
+
+        # Detail order
+        detail_resp = self.client.get(f'/api/v1/orders/{order_id}/')
+        self.assertEqual(detail_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_resp.data['id'], order_id)
+        self.assertEqual(len(detail_resp.data['items']), 1)
+
 
 
 

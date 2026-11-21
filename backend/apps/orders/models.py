@@ -237,6 +237,18 @@ class Order(models.Model):
         return self.net_payable_paise / 100.0
 
     @property
+    def gross_amount_inr(self) -> float:
+        return self.gross_amount_paise / 100.0
+
+    @property
+    def upgrade_discount_inr(self) -> float:
+        return self.upgrade_discount_paise / 100.0
+
+    @property
+    def coupon_discount_inr(self) -> float:
+        return self.coupon_discount_paise / 100.0
+
+    @property
     def taxable_base_inr(self) -> float:
         return self.taxable_base_paise / 100.0
 
@@ -286,3 +298,15 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.order.order_number} -> {self.product.title} (₹{self.net_price_paise / 100:.2f})"
+
+    @property
+    def unit_price_inr(self) -> float:
+        return self.unit_price_paise / 100.0
+
+    @property
+    def upgrade_credit_inr(self) -> float:
+        return self.upgrade_credit_paise / 100.0
+
+    @property
+    def net_price_inr(self) -> float:
+        return self.net_price_paise / 100.0

@@ -121,6 +121,9 @@ class Chapter(models.Model):
                 })
 
     def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+            self.slug = slugify(self.title) or f"chapter-{self.chapter_number}"
         self.clean()
         super().save(*args, **kwargs)
 
