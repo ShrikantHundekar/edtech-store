@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 from .models import Order, OrderItem, Coupon
 from apps.products.models import Product
@@ -35,6 +36,13 @@ class OrderSerializer(serializers.ModelSerializer):
     taxable_base_inr = serializers.FloatField(read_only=True)
     gst_amount_inr = serializers.FloatField(read_only=True)
     net_payable_inr = serializers.FloatField(read_only=True)
+    amount_paise = serializers.IntegerField(source='net_payable_paise', read_only=True)
+    currency = serializers.CharField(default='INR', read_only=True)
+    razorpay_key_id = serializers.SerializerMethodField()
+
+    def get_razorpay_key_id(self, obj):
+        # Return Razorpay key for frontend Checkout modal integration
+        return getattr(settings, 'RAZORPAY_KEY_ID', '')
 
     class Meta:
         model = Order
@@ -57,7 +65,10 @@ class OrderSerializer(serializers.ModelSerializer):
             'gst_amount_inr',
             'net_payable_paise',
             'net_payable_inr',
+            'amount_paise',
+            'currency',
             'razorpay_order_id',
+            'razorpay_key_id',
             'items',
             'created_at',
             'updated_at',

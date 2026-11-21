@@ -125,3 +125,95 @@ def provision_class_pass_entitlement(user, class_id: int, duration_days: int, or
     )
     return entitlement
 
+
+def provision_order_entitlements(order) -> list:
+    """
+    Provisions access entitlements for all items in an Order.
+    Handles:
+    - Chapter Notes -> CHAPTER entitlement (LIFETIME)
+    - Subject Pack -> SUBJECT entitlement (LIFETIME)
+    - Monthly/Annual Pass -> CLASS_PASS entitlement (TIME_BOUND, with pass renewal stacking)
+    - Custom Bundle -> BUNDLE entitlement and associated included subjects/chapters
+    - Atomically redeems order coupon if present.
+    """
+    from apps.products.models import Product
+    from apps.orders.services import redeem_coupon
+
+    user = order.user
+    created_entitlements = []
+
+    for item in order.items.select_related('product', 'product__chapter', 'product__subject').all():
+        prod = item.product
+
+        if prod.product_type == Product.PRODUCT_TYPE_CHAPTER_NOTES:
+            ch_id = prod.chapter_id
+            if ch_id:
+                ent, _ = Entitlement.objects.get_or_create(
+                    user=user,
+                    product_type='CHAPTER',
+                    scope_id=ch_id,
+                    defaults={
+                        'access_type': 'LIFETIME',
+                        'status': 'ACTIVE',
+                        'order': order
+                    }
+                )
+                created_entitlements.append(ent)
+
+        elif prod.product_type == Product.PRODUCT_TYPE_SUBJECT_PACK:
+            sub_id = prod.subject_id
+            if sub_id:
+                ent, _ = Entitlement.objects.get_or_create(
+                    user=user,
+                    product_type='SUBJECT',
+                    scope_id=sub_id,
+                    defaults={
+                        'access_type': 'LIFETIME',
+                        'status': 'ACTIVE',
+                        'order': order
+                    }
+                )
+                created_entitlements.append(ent)
+
+        elif prod.product_type in (Product.PRODUCT_TYPE_MONTHLY_PASS, Product.PRODUCT_TYPE_ANNUAL_PASS):
+            class_id = prod.academic_class_id
+            duration = prod.pass_duration_days or (365 if prod.product_type == Product.PRODUCT_TYPE_ANNUAL_PASS else 30)
+            if class_id:
+                ent = provision_class_pass_entitlement(user, class_id, duration, order=order)
+                created_entitlements.append(ent)
+
+        elif prod.product_type == Product.PRODUCT_TYPE_BUNDLE:
+            ent, _ = Entitlement.objects.get_or_create(
+                user=user,
+                product_type='BUNDLE',
+                scope_id=prod.id,
+                defaults={
+                    'access_type': 'LIFETIME',
+                    'status': 'ACTIVE',
+                    'order': order
+                }
+            )
+            created_entitlements.append(ent)
+            for bundle_item in prod.bundle_items.all():
+                if bundle_item.target_type == 'SUBJECT' and bundle_item.target_id:
+                    sub_ent, _ = Entitlement.objects.get_or_create(
+                        user=user,
+                        product_type='SUBJECT',
+                        scope_id=bundle_item.target_id,
+                        defaults={'access_type': 'LIFETIME', 'status': 'ACTIVE', 'order': order}
+                    )
+                    created_entitlements.append(sub_ent)
+                elif bundle_item.target_type == 'CHAPTER' and bundle_item.target_id:
+                    ch_ent, _ = Entitlement.objects.get_or_create(
+                        user=user,
+                        product_type='CHAPTER',
+                        scope_id=bundle_item.target_id,
+                        defaults={'access_type': 'LIFETIME', 'status': 'ACTIVE', 'order': order}
+                    )
+                    created_entitlements.append(ch_ent)
+
+    if order.coupon:
+        redeem_coupon(order.coupon)
+
+    return created_entitlements
+

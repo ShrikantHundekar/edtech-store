@@ -211,11 +211,34 @@ def create_order(user, raw_items: list, coupon_code: str = None):
     taxable_base_paise = gst['base_taxable_paise']
     gst_amount_paise = gst['total_gst_paise']
 
-    # Create Order record (status PENDING)
+    order_number = Order.generate_order_number()
+
+    # Razorpay order generation for orders with payable balance > 0
+    # For ₹0 balance orders (covered by upgrade credit / coupon), mark as PAID directly without invoking Razorpay
+    razorpay_order_id = None
+    if net_payable_paise > 0:
+        initial_status = Order.STATUS_PENDING
+        from apps.payments.services import create_razorpay_order
+        rzp_order = create_razorpay_order(
+            amount_paise=net_payable_paise,
+            receipt=order_number,
+            currency='INR',
+            notes={
+                "order_number": order_number,
+                "user_id": str(user.id),
+                "user_email": getattr(user, 'email', ''),
+            }
+        )
+        razorpay_order_id = rzp_order.get('id')
+    else:
+        initial_status = Order.STATUS_PAID
+
+    # Create Order record
     order = Order.objects.create(
         user=user,
-        order_number=Order.generate_order_number(),
-        status=Order.STATUS_PENDING,
+        order_number=order_number,
+        razorpay_order_id=razorpay_order_id,
+        status=initial_status,
         gross_amount_paise=gross_amount_paise,
         upgrade_discount_paise=upgrade_discount_paise,
         coupon=coupon_obj,
@@ -235,6 +258,11 @@ def create_order(user, raw_items: list, coupon_code: str = None):
             upgrade_credit_paise=item['upgrade_credit_paise'],
             net_price_paise=item['final_price_paise'],
         )
+
+    # For ₹0 balance orders, provision entitlements immediately
+    if initial_status == Order.STATUS_PAID:
+        from apps.entitlements.services import provision_order_entitlements
+        provision_order_entitlements(order)
 
     return order
 
