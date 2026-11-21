@@ -1,5 +1,29 @@
 from django.contrib import admin
-from .models import Order, OrderItem
+from .models import Order, OrderItem, Coupon
+
+
+@admin.register(Coupon)
+class CouponAdmin(admin.ModelAdmin):
+    list_display = (
+        'code',
+        'discount_type',
+        'get_discount_display',
+        'min_order_paise',
+        'times_used',
+        'usage_limit',
+        'valid_until',
+        'is_active',
+    )
+    list_filter = ('discount_type', 'is_active', 'valid_until')
+    search_fields = ('code',)
+    readonly_fields = ('times_used', 'created_at', 'updated_at')
+
+    def get_discount_display(self, obj):
+        if obj.discount_type == Coupon.DISCOUNT_TYPE_FLAT:
+            return f"₹{obj.discount_value / 100:.2f}"
+        return f"{obj.discount_value}%"
+    get_discount_display.short_description = 'Discount'
+
 
 
 class OrderItemInline(admin.TabularInline):
