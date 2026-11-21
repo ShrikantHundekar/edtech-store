@@ -721,4 +721,191 @@ class SubjectPackUpgradeCreditTests(APITestCase):
         self.assertEqual(resp.data['payable_price_paise'], 49900)
 
 
+class MultiItemCartPriceRecalculationTests(APITestCase):
+    def setUp(self):
+        self.board = Board.objects.create(name="CBSE Cart", slug="cbse-cart")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10-cart")
+        self.subject_math = Subject.objects.create(
+            academic_class=self.academic_class,
+            name="Mathematics",
+            slug="math-cart"
+        )
+        self.subject_sci = Subject.objects.create(
+            academic_class=self.academic_class,
+            name="Science",
+            slug="sci-cart"
+        )
+        self.ch_math_1 = Chapter.objects.create(
+            subject=self.subject_math,
+            chapter_number=1,
+            title="Real Numbers"
+        )
+        self.ch_sci_1 = Chapter.objects.create(
+            subject=self.subject_sci,
+            chapter_number=1,
+            title="Chemical Reactions"
+        )
+
+        # Products
+        self.prod_ch_math = Product.objects.create(
+            title="Class 10 Math Chapter 1",
+            slug="class-10-math-ch-1",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.ch_math_1,
+            is_active=True
+        )
+        Price.objects.create(product=self.prod_ch_math, amount_paise=4900, is_current=True)
+
+        self.prod_ch_sci = Product.objects.create(
+            title="Class 10 Science Chapter 1",
+            slug="class-10-sci-ch-1",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.ch_sci_1,
+            is_active=True
+        )
+        Price.objects.create(product=self.prod_ch_sci, amount_paise=4900, is_current=True)
+
+        self.prod_sci_pack = Product.objects.create(
+            title="Class 10 Science Full Pack",
+            slug="class-10-sci-full-pack",
+            product_type=Product.PRODUCT_TYPE_SUBJECT_PACK,
+            subject=self.subject_sci,
+            is_active=True
+        )
+        Price.objects.create(product=self.prod_sci_pack, amount_paise=49900, is_current=True)
+
+        self.user = User.objects.create_user(
+            email="cartstudent@example.com",
+            password="StrongPassword123!",
+            role="STUDENT"
+        )
+        token_resp = self.client.post('/api/v1/auth/login/', {
+            "email": "cartstudent@example.com",
+            "password": "StrongPassword123!"
+        })
+        self.token = token_resp.data['tokens']['access']
+
+    def test_cart_validation_completely_ignores_client_submitted_prices(self):
+        """
+        US-CART-01: Given a modified client payload that attempts to send a tampered price
+        (e.g. price: 1, price_paise: 10), the server completely ignores the client price
+        and recomputes strictly from source database records.
+        """
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        payload = {
+            "items": [
+                {
+                    "product_id": self.prod_ch_math.id,
+                    "price": 1,
+                    "price_paise": 100,
+                    "amount": 0,
+                    "final_price": 50
+                },
+                {
+                    "product_id": self.prod_ch_sci.id,
+                    "price": 0,
+                    "price_paise": 10,
+                    "amount": 0
+                }
+            ]
+        }
+
+        resp = self.client.post('/api/v1/cart/validate/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        self.assertTrue(data['valid'])
+        self.assertEqual(data['items_count'], 2)
+
+        # Check line items
+        items = data['items']
+        self.assertEqual(len(items), 2)
+        # Math chapter line item: strictly 4900 paise
+        math_item = next(item for item in items if item['product_id'] == self.prod_ch_math.id)
+        self.assertEqual(math_item['base_price_paise'], 4900)
+        self.assertEqual(math_item['final_price_paise'], 4900)
+        self.assertEqual(math_item['upgrade_credit_paise'], 0)
+
+        # Sci chapter line item: strictly 4900 paise
+        sci_item = next(item for item in items if item['product_id'] == self.prod_ch_sci.id)
+        self.assertEqual(sci_item['base_price_paise'], 4900)
+        self.assertEqual(sci_item['final_price_paise'], 4900)
+        self.assertEqual(sci_item['upgrade_credit_paise'], 0)
+
+        # Cart pricing totals
+        pricing = data['pricing']
+        self.assertEqual(pricing['total_base_price_paise'], 9800)
+        self.assertEqual(pricing['total_upgrade_credit_paise'], 0)
+        self.assertEqual(pricing['subtotal_paise'], 9800)
+        self.assertEqual(pricing['subtotal_inr'], 98.0)
+
+        # GST breakdown on 9800
+        gst = pricing['gst_breakdown']
+        self.assertEqual(gst['price_inclusive_paise'], 9800)
+        self.assertEqual(gst['base_taxable_paise'] + gst['total_gst_paise'], 9800)
+        self.assertEqual(gst['cgst_paise'] + gst['sgst_paise'], gst['total_gst_paise'])
+
+    def test_cart_validation_applies_subject_pack_upgrade_credit(self):
+        """
+        Cart validation applies upgrade credit dynamically when student owns prior chapters.
+        """
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Grant student ownership of Science Chapter 1
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.ch_sci_1.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        # Cart contains: Math Chapter 1 (4900 paise) + Science Full Pack (49900 - 4900 credit = 45000 paise)
+        payload = {
+            "items": [
+                {"product_id": self.prod_ch_math.id},
+                {"product_id": self.prod_sci_pack.id}
+            ]
+        }
+
+        resp = self.client.post('/api/v1/cart/validate/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        items = data['items']
+        sci_pack_item = next(item for item in items if item['product_id'] == self.prod_sci_pack.id)
+        self.assertEqual(sci_pack_item['base_price_paise'], 49900)
+        self.assertEqual(sci_pack_item['upgrade_credit_paise'], 4900)
+        self.assertEqual(sci_pack_item['final_price_paise'], 45000)
+
+        math_item = next(item for item in items if item['product_id'] == self.prod_ch_math.id)
+        self.assertEqual(math_item['final_price_paise'], 4900)
+
+        pricing = data['pricing']
+        self.assertEqual(pricing['total_base_price_paise'], 54800)
+        self.assertEqual(pricing['total_upgrade_credit_paise'], 4900)
+        self.assertEqual(pricing['subtotal_paise'], 49900)
+
+    def test_cart_validation_rejects_inactive_product(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Deactivate product
+        self.prod_ch_sci.is_active = False
+        self.prod_ch_sci.save()
+
+        payload = {
+            "items": [
+                {"product_id": self.prod_ch_math.id},
+                {"product_id": self.prod_ch_sci.id}
+            ]
+        }
+
+        resp = self.client.post('/api/v1/cart/validate/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data['valid'])
+        self.assertIn("no longer active", str(resp.data['errors']))
+
+
+
 

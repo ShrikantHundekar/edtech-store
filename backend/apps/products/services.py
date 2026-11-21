@@ -339,3 +339,82 @@ def calculate_subject_pack_upgrade_credit(user, product) -> dict:
     }
 
 
+def recalculate_cart_pricing(user, products: list) -> dict:
+    """
+    Recalculates cart line items and pricing strictly from source database records.
+    Completely ignores any client-supplied prices or tampering.
+
+    Computes:
+    - Source unit price from Price table for each product.
+    - Upgrade credit for Subject Packs based on user's prior purchases.
+    - Early renewal stacking info for Class Passes.
+    - Net final line item price.
+    - Cart subtotal (sum of all line item final prices).
+    - 18% inclusive GST breakdown on the cart subtotal.
+    """
+    from apps.products.models import Product
+    from apps.entitlements.services import calculate_pass_validity_window
+
+    line_items = []
+
+    for product in products:
+        base_price = product.current_price_paise
+        upgrade_credit = 0
+        final_price = base_price
+        renewal_preview = None
+        details = {}
+
+        if product.product_type == Product.PRODUCT_TYPE_SUBJECT_PACK:
+            calc = calculate_subject_pack_upgrade_credit(user, product)
+            upgrade_credit = calc["upgrade_credit_paise"]
+            final_price = calc["payable_price_paise"]
+            details = {
+                "owned_chapters_count": calc.get("owned_chapters_count", 0),
+                "total_credit_available_paise": calc.get("total_credit_available_paise", 0),
+            }
+        elif product.product_type in (Product.PRODUCT_TYPE_MONTHLY_PASS, Product.PRODUCT_TYPE_ANNUAL_PASS):
+            duration_days = product.pass_duration_days or 30
+            if product.academic_class_id:
+                renewal_preview = calculate_pass_validity_window(user, product.academic_class_id, duration_days)
+
+        line_item = {
+            "product_id": product.id,
+            "title": product.title,
+            "product_type": product.product_type,
+            "academic_class_id": product.academic_class_id,
+            "subject_id": product.subject_id,
+            "chapter_id": product.chapter_id,
+            "base_price_paise": base_price,
+            "base_price_inr": base_price / 100.0,
+            "upgrade_credit_paise": upgrade_credit,
+            "upgrade_credit_inr": upgrade_credit / 100.0,
+            "final_price_paise": final_price,
+            "final_price_inr": final_price / 100.0,
+            "currency": "INR",
+            "renewal_preview": renewal_preview,
+            **details,
+        }
+        line_items.append(line_item)
+
+    total_base_price_paise = sum(item["base_price_paise"] for item in line_items)
+    total_upgrade_credit_paise = sum(item["upgrade_credit_paise"] for item in line_items)
+    subtotal_paise = sum(item["final_price_paise"] for item in line_items)
+    gst_breakdown = calculate_gst_breakdown(subtotal_paise)
+
+    return {
+        "items": line_items,
+        "items_count": len(line_items),
+        "pricing": {
+            "total_base_price_paise": total_base_price_paise,
+            "total_base_price_inr": total_base_price_paise / 100.0,
+            "total_upgrade_credit_paise": total_upgrade_credit_paise,
+            "total_upgrade_credit_inr": total_upgrade_credit_paise / 100.0,
+            "subtotal_paise": subtotal_paise,
+            "subtotal_inr": subtotal_paise / 100.0,
+            "currency": "INR",
+            "gst_breakdown": gst_breakdown,
+        }
+    }
+
+
+

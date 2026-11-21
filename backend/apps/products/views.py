@@ -8,6 +8,7 @@ from .services import (
     check_product_purchase_eligibility,
     validate_cart_items_eligibility,
     calculate_subject_pack_upgrade_credit,
+    recalculate_cart_pricing,
 )
 
 
@@ -127,6 +128,10 @@ class CartValidateEligibilityView(APIView):
     - Rejects intra-cart overlaps (e.g. buying both Subject Pack and a Chapter in that subject).
     - Rejects intra-cart overlaps (e.g. buying both Class Pass and a Subject/Chapter in that class).
     - Rejects duplicate items.
+
+    Server-authoritative price recalculation:
+    - Client-submitted prices are completely ignored.
+    - Recomputes unit prices, upgrade credits, renewal previews, and subtotal from source database rows.
     """
     permission_classes = [permissions.AllowAny]
 
@@ -159,13 +164,24 @@ class CartValidateEligibilityView(APIView):
 
         products = list(Product.objects.filter(id__in=product_ids).select_related(
             'academic_class', 'subject', 'chapter'
-        ))
+        ).prefetch_related('prices'))
 
         found_ids = {p.id for p in products}
         missing_ids = [pid for pid in product_ids if pid not in found_ids]
         if missing_ids:
             return Response(
                 {"valid": False, "errors": [f"Product ID {pid} does not exist." for pid in missing_ids]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check for inactive products
+        inactive_products = [p.title for p in products if not p.is_active]
+        if inactive_products:
+            return Response(
+                {
+                    "valid": False,
+                    "errors": [f"Product '{title}' is no longer active or available for purchase." for title in inactive_products]
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -184,11 +200,16 @@ class CartValidateEligibilityView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        user = request.user if request.user.is_authenticated else None
+        cart_data = recalculate_cart_pricing(user, ordered_products)
+
         return Response(
             {
                 "valid": True,
-                "message": "All items in cart are valid and eligible for purchase.",
-                "items_count": len(ordered_products)
+                "message": "Cart recalculated and validated successfully.",
+                "items_count": cart_data["items_count"],
+                "items": cart_data["items"],
+                "pricing": cart_data["pricing"],
             },
             status=status.HTTP_200_OK
         )
