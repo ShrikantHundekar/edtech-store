@@ -213,3 +213,121 @@ def validate_cart_items_eligibility(user, products: list) -> tuple:
 
     return (len(errors) == 0, errors)
 
+
+def calculate_subject_pack_upgrade_credit(user, product) -> dict:
+    """
+    Calculates upgrade discount credit for students upgrading to a Subject Pack:
+    Formula:
+      Upgrade Price = max(0, Subject Pack Price - Sum of Amounts Paid for Owned Chapters)
+      Floors at 0 paise if total prior purchases exceed pack price.
+    """
+    from apps.entitlements.models import Entitlement
+    from apps.products.models import Product
+    from django.utils import timezone
+    from django.db.models import Q
+
+    base_price = product.current_price_paise
+
+    if product.product_type != Product.PRODUCT_TYPE_SUBJECT_PACK:
+        return {
+            "product_id": product.id,
+            "title": product.title,
+            "product_type": product.product_type,
+            "base_price_paise": base_price,
+            "base_price_inr": base_price / 100.0,
+            "upgrade_credit_paise": 0,
+            "upgrade_credit_inr": 0.0,
+            "payable_price_paise": base_price,
+            "payable_price_inr": base_price / 100.0,
+            "owned_chapters_count": 0,
+            "owned_chapters": [],
+            "gst_breakdown": calculate_gst_breakdown(base_price),
+        }
+
+    if not user or not user.is_authenticated or not product.subject:
+        return {
+            "product_id": product.id,
+            "title": product.title,
+            "product_type": product.product_type,
+            "base_price_paise": base_price,
+            "base_price_inr": base_price / 100.0,
+            "upgrade_credit_paise": 0,
+            "upgrade_credit_inr": 0.0,
+            "payable_price_paise": base_price,
+            "payable_price_inr": base_price / 100.0,
+            "owned_chapters_count": 0,
+            "owned_chapters": [],
+            "gst_breakdown": calculate_gst_breakdown(base_price),
+        }
+
+    now = timezone.now()
+    subject_chapters = {ch.id: ch for ch in product.subject.chapters.all()}
+
+    entitlements = Entitlement.objects.filter(
+        user=user,
+        status='ACTIVE',
+        product_type='CHAPTER',
+        scope_id__in=subject_chapters.keys()
+    ).filter(
+        Q(access_type='LIFETIME') | Q(access_type='TIME_BOUND', valid_until__gt=now)
+    ).select_related('order').order_by('scope_id', '-created_at')
+
+    owned_chapters_dict = {}
+    for ent in entitlements:
+        ch_id = ent.scope_id
+        if ch_id in owned_chapters_dict:
+            continue
+
+        ch = subject_chapters.get(ch_id)
+        if not ch:
+            continue
+
+        credit_amount = 0
+        if ent.order:
+            order_item = ent.order.items.filter(
+                product__product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+                product__chapter_id=ch_id
+            ).first()
+            if order_item:
+                credit_amount = order_item.net_price_paise
+
+        if credit_amount == 0:
+            ch_prod = Product.objects.filter(
+                product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+                chapter_id=ch_id
+            ).first()
+            if ch_prod:
+                credit_amount = ch_prod.current_price_paise
+
+        owned_chapters_dict[ch_id] = {
+            "chapter_id": ch.id,
+            "chapter_title": ch.title,
+            "chapter_number": ch.chapter_number,
+            "credit_paise": credit_amount,
+            "credit_inr": credit_amount / 100.0,
+        }
+
+    owned_chapters_list = list(owned_chapters_dict.values())
+    total_credit = sum(item["credit_paise"] for item in owned_chapters_list)
+
+    # Formula: Upgrade Price = max(0, Subject Pack Price - Sum of Amounts Paid for Owned Chapters)
+    payable_price = max(0, base_price - total_credit)
+    upgrade_credit_applied = min(total_credit, base_price)
+
+    return {
+        "product_id": product.id,
+        "title": product.title,
+        "product_type": product.product_type,
+        "base_price_paise": base_price,
+        "base_price_inr": base_price / 100.0,
+        "upgrade_credit_paise": upgrade_credit_applied,
+        "upgrade_credit_inr": upgrade_credit_applied / 100.0,
+        "total_credit_available_paise": total_credit,
+        "payable_price_paise": payable_price,
+        "payable_price_inr": payable_price / 100.0,
+        "owned_chapters_count": len(owned_chapters_list),
+        "owned_chapters": owned_chapters_list,
+        "gst_breakdown": calculate_gst_breakdown(payable_price),
+    }
+
+

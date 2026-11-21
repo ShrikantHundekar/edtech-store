@@ -4,7 +4,11 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .models import Product
 from .serializers import ProductSerializer
-from .services import check_product_purchase_eligibility, validate_cart_items_eligibility
+from .services import (
+    check_product_purchase_eligibility,
+    validate_cart_items_eligibility,
+    calculate_subject_pack_upgrade_credit,
+)
 
 
 class ProductListView(generics.ListAPIView):
@@ -183,3 +187,30 @@ class CartValidateEligibilityView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class ProductCalculatePriceView(APIView):
+    """
+    POST/GET /api/v1/products/{id}/calculate-price/
+    Returns user-tailored price after applying Subject Pack upgrade credit.
+    Formula:
+      Upgrade Price = max(0, Subject Pack Price - Sum of Amounts Paid for Owned Chapters)
+    Floors strictly at 0 paise if total prior purchases exceed pack price.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, pk, *args, **kwargs):
+        return self._calculate(request, pk)
+
+    def post(self, request, pk, *args, **kwargs):
+        return self._calculate(request, pk)
+
+    def _calculate(self, request, pk):
+        product = get_object_or_404(
+            Product.objects.select_related('academic_class', 'subject', 'chapter'),
+            id=pk
+        )
+        user = request.user if request.user.is_authenticated else None
+        calculation = calculate_subject_pack_upgrade_credit(user, product)
+        return Response(calculation, status=status.HTTP_200_OK)
+

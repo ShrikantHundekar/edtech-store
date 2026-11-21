@@ -8,7 +8,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.catalog.models import Board, ClassLevel, Subject, Chapter
 from apps.entitlements.models import Entitlement
 from .models import Product, Price, BundleItem
-from .services import calculate_gst_breakdown
+from .services import calculate_gst_breakdown, calculate_subject_pack_upgrade_credit
 
 User = get_user_model()
 
@@ -573,5 +573,152 @@ class ProductOwnershipAndOverlappingCartTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(resp.data['valid'])
         self.assertEqual(resp.data['items_count'], 2)
+
+
+class SubjectPackUpgradeCreditTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="upgrader@test.com",
+            password="Password123!",
+            role="STUDENT"
+        )
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+
+        self.board = Board.objects.create(name="CBSE", slug="cbse")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.math = Subject.objects.create(academic_class=self.academic_class, name="Mathematics", slug="math")
+
+        # 5 chapters under Math
+        self.chapters = []
+        for i in range(1, 6):
+            ch = Chapter.objects.create(
+                subject=self.math,
+                chapter_number=i,
+                title=f"Math Chapter {i}",
+                slug=f"math-ch-{i}"
+            )
+            self.chapters.append(ch)
+
+            # Product for each chapter (₹49 -> 4,900 paise)
+            p = Product.objects.create(
+                title=f"Math Ch {i} Notes",
+                slug=f"math-ch-{i}-notes",
+                product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+                subject=self.math,
+                chapter=ch,
+                academic_class=self.academic_class,
+                board=self.board
+            )
+            Price.objects.create(product=p, amount_paise=4900, is_current=True)
+
+        # Subject Pack (₹499 -> 49,900 paise)
+        self.subject_pack = Product.objects.create(
+            title="Class 10 Math Subject Pack",
+            slug="class-10-math-subject-pack",
+            product_type=Product.PRODUCT_TYPE_SUBJECT_PACK,
+            subject=self.math,
+            academic_class=self.academic_class,
+            board=self.board
+        )
+        Price.objects.create(product=self.subject_pack, amount_paise=49900, is_current=True)
+
+    def test_zero_credit_when_no_chapters_owned(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        resp = self.client.post(f'/api/v1/products/{self.subject_pack.id}/calculate-price/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        self.assertEqual(data['base_price_paise'], 49900)
+        self.assertEqual(data['upgrade_credit_paise'], 0)
+        self.assertEqual(data['payable_price_paise'], 49900)
+        self.assertEqual(data['payable_price_inr'], 499.0)
+        self.assertEqual(data['owned_chapters_count'], 0)
+        self.assertEqual(len(data['owned_chapters']), 0)
+
+    def test_credit_deduction_for_two_owned_chapters(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Student owns Chapter 1 (₹49) and Chapter 2 (₹49) -> Total credit ₹98 (9,800 paise)
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.chapters[0].id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.chapters[1].id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        resp = self.client.post(f'/api/v1/products/{self.subject_pack.id}/calculate-price/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        # Upgrade Price = max(0, 49900 - 9800) = 40100 paise (₹401.00)
+        self.assertEqual(data['base_price_paise'], 49900)
+        self.assertEqual(data['upgrade_credit_paise'], 9800)
+        self.assertEqual(data['upgrade_credit_inr'], 98.0)
+        self.assertEqual(data['payable_price_paise'], 40100)
+        self.assertEqual(data['payable_price_inr'], 401.0)
+        self.assertEqual(data['owned_chapters_count'], 2)
+
+        # Inclusions in credit
+        owned_ids = [c['chapter_id'] for c in data['owned_chapters']]
+        self.assertIn(self.chapters[0].id, owned_ids)
+        self.assertIn(self.chapters[1].id, owned_ids)
+
+        # 18% GST recomputed on ₹401.00:
+        # Base taxable = round(40100 / 1.18) = 33983 paise
+        # Total GST = 40100 - 33983 = 6117 paise
+        # CGST = round(6117 / 2) = 3058, SGST = 6117 - 3058 = 3059
+        gst = data['gst_breakdown']
+        self.assertEqual(gst['price_inclusive_paise'], 40100)
+        self.assertEqual(gst['base_taxable_paise'], 33983)
+        self.assertEqual(gst['total_gst_paise'], 6117)
+        self.assertEqual(gst['cgst_paise'], 3058)
+        self.assertEqual(gst['sgst_paise'], 3059)
+        self.assertEqual(gst['cgst_paise'] + gst['sgst_paise'], gst['total_gst_paise'])
+
+
+    def test_price_floors_at_zero_when_credits_exceed_pack_price(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+        # Set Subject Pack price to ₹100 (10,000 paise)
+        Price.objects.filter(product=self.subject_pack).update(is_current=False)
+        Price.objects.create(product=self.subject_pack, amount_paise=10000, is_current=True)
+
+        # Student owns 3 chapters (3 * 4900 = 14,700 paise > 10,000 paise)
+        for i in range(3):
+            Entitlement.objects.create(
+                user=self.user,
+                product_type='CHAPTER',
+                scope_id=self.chapters[i].id,
+                access_type='LIFETIME',
+                status='ACTIVE'
+            )
+
+        resp = self.client.post(f'/api/v1/products/{self.subject_pack.id}/calculate-price/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+
+        # Upgrade Price = max(0, 10000 - 14700) = 0 paise (floors at 0)
+        self.assertEqual(data['base_price_paise'], 10000)
+        self.assertEqual(data['payable_price_paise'], 0)
+        self.assertEqual(data['payable_price_inr'], 0.0)
+        self.assertEqual(data['upgrade_credit_paise'], 10000)  # Capped at base price
+        self.assertEqual(data['total_credit_available_paise'], 14700)
+        self.assertEqual(data['gst_breakdown']['price_inclusive_paise'], 0)
+        self.assertEqual(data['gst_breakdown']['total_gst_paise'], 0)
+
+    def test_unauthenticated_user_receives_full_price_without_credit(self):
+        resp = self.client.get(f'/api/v1/products/{self.subject_pack.id}/calculate-price/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['upgrade_credit_paise'], 0)
+        self.assertEqual(resp.data['payable_price_paise'], 49900)
+
 
 
