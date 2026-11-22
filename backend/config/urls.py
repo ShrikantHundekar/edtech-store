@@ -43,6 +43,7 @@ urlpatterns = [
     path('api/v1/cart/validate/', CartValidateEligibilityView.as_view(), name='cart_validate'),
     path('api/v1/coupons/', include('apps.orders.coupon_urls')),
     path('api/v1/orders/', include('apps.orders.urls')),
+    path('api/v1/payments/', include('apps.payments.urls')),
     # Explicit security barriers: Restrict raw direct access to notes
     path('media/notes/<path:path>', block_direct_media_access, name='block_direct_media_notes'),
     path('media/materials/<path:path>', block_direct_media_access, name='block_direct_media_materials'),

@@ -1,3 +1,6 @@
+import hmac
+import hashlib
+import json
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.conf import settings
@@ -10,7 +13,11 @@ from apps.products.models import Product, Price
 from apps.orders.models import Order
 from apps.entitlements.models import Entitlement
 from .models import Payment, WebhookEvent
-from .services import get_razorpay_client, create_razorpay_order
+from .services import (
+    get_razorpay_client,
+    create_razorpay_order,
+    verify_razorpay_webhook_signature,
+)
 
 User = get_user_model()
 
@@ -210,4 +217,134 @@ class RazorpayIntegrationTests(APITestCase):
             status='ACTIVE'
         ).exists()
         self.assertTrue(has_pack_entitlement, "Subject pack entitlement should be granted immediately for ₹0 order")
+
+
+class RazorpayWebhookAPITests(APITestCase):
+    def setUp(self):
+        self.webhook_secret = getattr(settings, 'RAZORPAY_WEBHOOK_SECRET', 'test_webhook_secret_key')
+        self.sample_event_id = "evt_capture_12345"
+        self.sample_payload = {
+            "entity": "event",
+            "account_id": "acc_test123",
+            "event": "payment.captured",
+            "contains": ["payment"],
+            "payload": {
+                "payment": {
+                    "entity": {
+                        "id": "pay_test_payment_999",
+                        "entity": "payment",
+                        "amount": 4900,
+                        "currency": "INR",
+                        "status": "captured",
+                        "order_id": "order_test_order_777",
+                        "method": "upi",
+                    }
+                }
+            },
+            "created_at": 1700000000
+        }
+        self.sample_payload["id"] = self.sample_event_id
+
+    def _generate_signature(self, raw_bytes: bytes) -> str:
+        return hmac.new(
+            self.webhook_secret.encode('utf-8'),
+            raw_bytes,
+            hashlib.sha256
+        ).hexdigest()
+
+    def test_webhook_missing_signature_rejected(self):
+        raw_body = json.dumps(self.sample_payload).encode('utf-8')
+        resp = self.client.post(
+            '/api/v1/payments/webhook/',
+            data=raw_body,
+            content_type='application/json'
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Missing X-Razorpay-Signature", str(resp.data))
+
+    def test_webhook_invalid_signature_rejected(self):
+        raw_body = json.dumps(self.sample_payload).encode('utf-8')
+        resp = self.client.post(
+            '/api/v1/payments/webhook/',
+            data=raw_body,
+            content_type='application/json',
+            HTTP_X_RAZORPAY_SIGNATURE="tampered_invalid_signature_hex"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid webhook signature", str(resp.data))
+
+    def test_webhook_valid_signature_persists_raw_event(self):
+        """
+        Acceptance Criteria:
+        - Inspects X-Razorpay-Signature header.
+        - Verifies signature against the unparsed, raw request body bytes using RAZORPAY_WEBHOOK_SECRET.
+        - Saves raw event in webhook_events table before processing.
+        """
+        raw_body = json.dumps(self.sample_payload).encode('utf-8')
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+        self.assertEqual(data['status'], 'received')
+        self.assertEqual(data['event_id'], self.sample_event_id)
+        self.assertEqual(data['event_type'], 'payment.captured')
+
+        # Verify event saved in webhook_events table with is_processed=False
+        saved_event = WebhookEvent.objects.filter(event_id=self.sample_event_id).first()
+        self.assertIsNotNone(saved_event)
+        self.assertEqual(saved_event.event_type, 'payment.captured')
+        self.assertFalse(saved_event.is_processed)
+        self.assertEqual(saved_event.payload['payload']['payment']['entity']['id'], 'pay_test_payment_999')
+
+    def test_webhook_idempotent_replay(self):
+        """
+        Duplicate delivery of the same webhook event ID does not duplicate records.
+        """
+        raw_body = json.dumps(self.sample_payload).encode('utf-8')
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp1 = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+            self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+
+            # Replay same webhook
+            resp2 = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+            self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+            self.assertEqual(resp2.data['status'], 'already_received')
+
+        # Only 1 record in database
+        self.assertEqual(WebhookEvent.objects.filter(event_id=self.sample_event_id).count(), 1)
+
+    def test_webhook_malformed_json_rejected(self):
+        raw_body = b"not_valid_json{"
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Malformed JSON payload", str(resp.data))
+
 
