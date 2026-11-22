@@ -219,3 +219,87 @@ def provision_order_entitlements(order) -> list:
 
     return created_entitlements
 
+
+def manual_grant_entitlement(
+    admin_user,
+    student_user,
+    product_type: str,
+    scope_id: int,
+    reason: str,
+    access_type: str = 'LIFETIME',
+    valid_until=None
+) -> tuple:
+    """
+    Manually grants an entitlement to a student by an administrator with audit logging.
+    Requirement:
+    - Reason field is strictly mandatory.
+    - Creates ManualAccessLog recording admin_id, student_id, action, reason, timestamp.
+    """
+    from .models import ManualAccessLog
+
+    if not reason or not str(reason).strip():
+        raise ValueError("Reason field is strictly mandatory.")
+
+    if not admin_user or (not getattr(admin_user, 'is_admin', False) and not getattr(admin_user, 'is_staff', False)):
+        raise PermissionError("Administrator privileges required for manual entitlement grant.")
+
+    if not student_user:
+        raise ValueError("Valid student user is required.")
+
+    valid_types = [choice[0] for choice in Entitlement.PRODUCT_TYPE_CHOICES]
+    if product_type not in valid_types:
+        raise ValueError(f"Invalid product_type '{product_type}'. Must be one of {valid_types}.")
+
+    entitlement, _ = Entitlement.objects.update_or_create(
+        user=student_user,
+        product_type=product_type,
+        scope_id=scope_id,
+        defaults={
+            'access_type': access_type,
+            'valid_until': valid_until,
+            'status': 'ACTIVE',
+            'order': None,
+        }
+    )
+
+    log = ManualAccessLog.objects.create(
+        admin=admin_user,
+        student=student_user,
+        action='GRANT',
+        entitlement=entitlement,
+        reason=reason.strip()
+    )
+
+    return entitlement, log
+
+
+def manual_revoke_entitlement(admin_user, entitlement_id: int, reason: str) -> tuple:
+    """
+    Manually revokes an entitlement by an administrator with audit logging.
+    Requirement:
+    - Reason field is strictly mandatory.
+    - Updates entitlement status to REVOKED and logs audit entry.
+    """
+    from .models import ManualAccessLog
+
+    if not reason or not str(reason).strip():
+        raise ValueError("Reason field is strictly mandatory.")
+
+    if not admin_user or (not getattr(admin_user, 'is_admin', False) and not getattr(admin_user, 'is_staff', False)):
+        raise PermissionError("Administrator privileges required for manual entitlement revoke.")
+
+    entitlement = Entitlement.objects.get(id=entitlement_id)
+    entitlement.status = 'REVOKED'
+    entitlement.save(update_fields=['status', 'updated_at'])
+
+    log = ManualAccessLog.objects.create(
+        admin=admin_user,
+        student=entitlement.user,
+        action='REVOKE',
+        entitlement=entitlement,
+        reason=reason.strip()
+    )
+
+    return entitlement, log
+
+

@@ -564,4 +564,172 @@ class AtomicOrderFulfillmentEntitlementTests(TestCase):
         self.assertTrue(ent.is_currently_active)
 
 
+class AdminManualEntitlementAuditTests(APITestCase):
+    """
+    Issue #37: Admin manual entitlement grant and revoke with audit logging.
+    Requirements:
+    - Create ManualAccessLog recording admin_id, student_id, action, reason, timestamp.
+    Acceptance Criteria:
+    - Reason field is strictly mandatory.
+    - Updates entitlement status and logs audit entry.
+    """
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="admin_entitlement@example.com",
+            password="AdminPassword123!",
+            role="ADMIN"
+        )
+        self.admin_token = str(RefreshToken.for_user(self.admin).access_token)
+
+        self.student = User.objects.create_user(
+            email="student_support@example.com",
+            password="StudentPassword123!",
+            role="STUDENT"
+        )
+        self.student_token = str(RefreshToken.for_user(self.student).access_token)
+
+        self.board = Board.objects.create(name="CBSE Audit", slug="cbse-audit")
+        self.cls = ClassLevel.objects.create(board=self.board, name="Class 10", slug="c10-audit")
+        self.subject = Subject.objects.create(academic_class=self.cls, name="Chemistry", slug="chem-audit")
+        self.chapter = Chapter.objects.create(subject=self.subject, chapter_number=1, title="Acids & Bases", slug="acids-bases")
+
+    def test_admin_manual_grant_creates_entitlement_and_audit_log(self):
+        """Admin grants access with valid reason; creates entitlement and audit entry."""
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        payload = {
+            "student_id": self.student.id,
+            "product_type": "CHAPTER",
+            "scope_id": self.chapter.id,
+            "access_type": "LIFETIME",
+            "reason": "Customer support resolution for duplicate payment ticket #1029"
+        }
+        resp = self.client.post('/api/v1/admin/entitlements/grant/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data['message'], "Entitlement granted successfully.")
+
+        # Entitlement verified
+        ent = Entitlement.objects.get(user=self.student, product_type='CHAPTER', scope_id=self.chapter.id)
+        self.assertEqual(ent.status, 'ACTIVE')
+        self.assertEqual(ent.access_type, 'LIFETIME')
+        self.assertIsNone(ent.order)
+
+        # Audit log verified
+        log = ManualAccessLog.objects.filter(student=self.student, action='GRANT').first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.admin, self.admin)
+        self.assertEqual(log.entitlement, ent)
+        self.assertEqual(log.reason, "Customer support resolution for duplicate payment ticket #1029")
+        self.assertIsNotNone(log.created_at)
+
+    def test_admin_manual_grant_fails_without_reason(self):
+        """Acceptance Criteria: Reason field is strictly mandatory."""
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+
+        # Missing reason
+        payload_missing = {
+            "student_id": self.student.id,
+            "product_type": "CHAPTER",
+            "scope_id": self.chapter.id,
+        }
+        resp = self.client.post('/api/v1/admin/entitlements/grant/', payload_missing, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", resp.data)
+
+        # Empty whitespace reason
+        payload_empty = {
+            "student_id": self.student.id,
+            "product_type": "CHAPTER",
+            "scope_id": self.chapter.id,
+            "reason": "   "
+        }
+        resp2 = self.client.post('/api/v1/admin/entitlements/grant/', payload_empty, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", resp2.data)
+
+        # Ensure no entitlement or log was created
+        self.assertFalse(Entitlement.objects.filter(user=self.student).exists())
+        self.assertFalse(ManualAccessLog.objects.filter(student=self.student).exists())
+
+    def test_admin_manual_revoke_updates_status_and_logs_audit(self):
+        """Admin revokes access with valid reason; updates status to REVOKED and logs audit entry."""
+        # Setup existing active entitlement
+        ent = Entitlement.objects.create(
+            user=self.student,
+            product_type='SUBJECT',
+            scope_id=self.subject.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        payload = {
+            "reason": "Student requested refund processed through support"
+        }
+        resp = self.client.post(f'/api/v1/admin/entitlements/{ent.id}/revoke/', payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        # Entitlement status updated
+        ent.refresh_from_db()
+        self.assertEqual(ent.status, 'REVOKED')
+
+        # Audit log created
+        log = ManualAccessLog.objects.filter(student=self.student, action='REVOKE').first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.admin, self.admin)
+        self.assertEqual(log.entitlement, ent)
+        self.assertEqual(log.reason, "Student requested refund processed through support")
+
+    def test_admin_manual_revoke_fails_without_reason(self):
+        """Revocation fails if reason is empty; status remains active."""
+        ent = Entitlement.objects.create(
+            user=self.student,
+            product_type='SUBJECT',
+            scope_id=self.subject.id,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.admin_token}')
+        resp = self.client.post(f'/api/v1/admin/entitlements/{ent.id}/revoke/', {"reason": ""}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", resp.data)
+
+        # Entitlement still active
+        ent.refresh_from_db()
+        self.assertEqual(ent.status, 'ACTIVE')
+
+    def test_student_cannot_access_admin_entitlements_api(self):
+        """Students are rejected with HTTP 403 Forbidden."""
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.student_token}')
+        resp = self.client.post('/api/v1/admin/entitlements/grant/', {}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_service_level_strictly_enforces_mandatory_reason(self):
+        """Direct service calls raise ValueError when reason is missing."""
+        from apps.entitlements.services import manual_grant_entitlement, manual_revoke_entitlement
+
+        with self.assertRaises(ValueError):
+            manual_grant_entitlement(
+                admin_user=self.admin,
+                student_user=self.student,
+                product_type='CHAPTER',
+                scope_id=self.chapter.id,
+                reason=""
+            )
+
+        ent = Entitlement.objects.create(
+            user=self.student,
+            product_type='CHAPTER',
+            scope_id=self.chapter.id,
+            status='ACTIVE'
+        )
+        with self.assertRaises(ValueError):
+            manual_revoke_entitlement(
+                admin_user=self.admin,
+                entitlement_id=ent.id,
+                reason="   "
+            )
+
+
+
 
