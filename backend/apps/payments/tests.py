@@ -222,6 +222,40 @@ class RazorpayIntegrationTests(APITestCase):
 class RazorpayWebhookAPITests(APITestCase):
     def setUp(self):
         self.webhook_secret = getattr(settings, 'RAZORPAY_WEBHOOK_SECRET', 'test_webhook_secret_key')
+        self.user = User.objects.create_user(
+            email="webhook_student@example.com",
+            password="StrongPassword123!",
+            role="STUDENT"
+        )
+        self.board = Board.objects.create(name="CBSE Hook", slug="cbse-hook")
+        self.academic_class = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10-hook")
+        self.subject = Subject.objects.create(academic_class=self.academic_class, name="Math", slug="math-hook")
+        self.chapter = Chapter.objects.create(subject=self.subject, chapter_number=1, title="Real Numbers", slug="real-numbers-hook")
+        self.product = Product.objects.create(
+            title="Class 10 Math Chapter 1",
+            slug="ch1-hook-notes",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.chapter,
+            is_active=True
+        )
+        Price.objects.create(product=self.product, amount_paise=4900, is_current=True)
+
+        self.order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            razorpay_order_id="order_test_order_777",
+            status=Order.STATUS_PENDING,
+            gross_amount_paise=4900,
+            net_payable_paise=4900
+        )
+        from apps.orders.models import OrderItem
+        self.order_item = OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            unit_price_paise=4900,
+            net_price_paise=4900
+        )
+
         self.sample_event_id = "evt_capture_12345"
         self.sample_payload = {
             "entity": "event",
@@ -273,12 +307,15 @@ class RazorpayWebhookAPITests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Invalid webhook signature", str(resp.data))
 
-    def test_webhook_valid_signature_persists_raw_event(self):
+    def test_webhook_valid_signature_persists_and_processes_payment_captured(self):
         """
-        Acceptance Criteria:
+        Issue #31 & #32 Acceptance Criteria:
         - Inspects X-Razorpay-Signature header.
         - Verifies signature against the unparsed, raw request body bytes using RAZORPAY_WEBHOOK_SECRET.
         - Saves raw event in webhook_events table before processing.
+        - Verifies amount_paid == order.net_payable_paise.
+        - Transitions order.status = 'PAID'.
+        - Provisions entitlements.
         """
         raw_body = json.dumps(self.sample_payload).encode('utf-8')
         valid_signature = self._generate_signature(raw_body)
@@ -293,16 +330,112 @@ class RazorpayWebhookAPITests(APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         data = resp.data
-        self.assertEqual(data['status'], 'received')
+        self.assertEqual(data['status'], 'processed')
         self.assertEqual(data['event_id'], self.sample_event_id)
         self.assertEqual(data['event_type'], 'payment.captured')
 
-        # Verify event saved in webhook_events table with is_processed=False
+        # Verify event saved in webhook_events table with is_processed=True
         saved_event = WebhookEvent.objects.filter(event_id=self.sample_event_id).first()
         self.assertIsNotNone(saved_event)
         self.assertEqual(saved_event.event_type, 'payment.captured')
-        self.assertFalse(saved_event.is_processed)
+        self.assertTrue(saved_event.is_processed)
         self.assertEqual(saved_event.payload['payload']['payment']['entity']['id'], 'pay_test_payment_999')
+
+        # Verify Order transitioned to PAID
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PAID)
+
+        # Verify Payment record created with status CAPTURED
+        payment_record = Payment.objects.filter(razorpay_payment_id='pay_test_payment_999').first()
+        self.assertIsNotNone(payment_record)
+        self.assertEqual(payment_record.status, Payment.STATUS_CAPTURED)
+        self.assertEqual(payment_record.amount_paise, 4900)
+
+        # Verify Entitlement provisioned to student
+        has_entitlement = Entitlement.objects.filter(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.chapter.id,
+            status='ACTIVE'
+        ).exists()
+        self.assertTrue(has_entitlement, "Student should have active chapter entitlement after payment.captured")
+
+    def test_payment_captured_amount_mismatch_rejected(self):
+        """
+        Issue #32 Acceptance Criteria:
+        - Amount reconciliation: if amount_paid != order.net_payable_paise,
+          order remains PENDING, payment marked FAILED, zero entitlements granted.
+        """
+        tampered_payload = dict(self.sample_payload)
+        tampered_payload["id"] = "evt_tampered_amount_mismatch"
+        tampered_payload["payload"] = {
+            "payment": {
+                "entity": {
+                    "id": "pay_tampered_123",
+                    "amount": 100,  # 100 paise != 4900 paise expected!
+                    "currency": "INR",
+                    "status": "captured",
+                    "order_id": "order_test_order_777",
+                    "method": "upi",
+                }
+            }
+        }
+        raw_body = json.dumps(tampered_payload).encode('utf-8')
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Amount reconciliation mismatch", str(resp.data))
+
+        # Order must NOT be marked PAID
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PENDING)
+
+        # Payment record created as FAILED with error code
+        failed_payment = Payment.objects.filter(razorpay_payment_id='pay_tampered_123').first()
+        self.assertIsNotNone(failed_payment)
+        self.assertEqual(failed_payment.status, Payment.STATUS_FAILED)
+        self.assertEqual(failed_payment.error_code, 'AMOUNT_MISMATCH')
+
+        # Zero entitlements granted
+        has_entitlement = Entitlement.objects.filter(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.chapter.id
+        ).exists()
+        self.assertFalse(has_entitlement, "Zero entitlements should be granted when amounts mismatch")
+
+    def test_payment_captured_order_not_found(self):
+        nonexistent_payload = dict(self.sample_payload)
+        nonexistent_payload["id"] = "evt_nonexistent_order"
+        nonexistent_payload["payload"] = {
+            "payment": {
+                "entity": {
+                    "id": "pay_nonexistent_123",
+                    "amount": 4900,
+                    "order_id": "order_non_existent_99999",
+                }
+            }
+        }
+        raw_body = json.dumps(nonexistent_payload).encode('utf-8')
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("No order found", str(resp.data))
 
     def test_webhook_idempotent_replay(self):
         """

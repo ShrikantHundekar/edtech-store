@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import WebhookEvent
-from .services import verify_razorpay_webhook_signature
+from .services import verify_razorpay_webhook_signature, handle_payment_captured
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,21 @@ class RazorpayWebhookView(APIView):
             )
 
         logger.info(f"Successfully recorded webhook event {event_id} ({event_type})")
+
+        # Process payment.captured event
+        if event_type == 'payment.captured':
+            result = handle_payment_captured(payload, webhook_event=webhook_event)
+            if not result['success']:
+                return Response(result, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "status": "processed",
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "result": result
+                },
+                status=status.HTTP_200_OK
+            )
 
         return Response(
             {
