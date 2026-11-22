@@ -123,22 +123,119 @@ def verify_razorpay_webhook_signature(raw_body: bytes, received_signature: str) 
     return hmac.compare_digest(generated, received_signature)
 
 
-def handle_payment_captured(payload: dict, webhook_event=None) -> dict:
+def fulfill_order_payment(
+    order,
+    payment_id: str,
+    amount_paise: int,
+    currency: str = 'INR',
+    method: str = '',
+    webhook_event=None
+) -> dict:
     """
-    Fulfills order upon receiving payment.captured webhook or checkout verification:
-    1. Extracts payment entity and order ID.
-    2. Performs amount reconciliation: amount_paid == order.net_payable_paise.
-    3. Handles dual-path idempotency: if order already PAID, skips duplicate fulfillment.
-    4. Transitions order.status = 'PAID'.
-    5. Records Payment record with status 'CAPTURED'.
-    6. Provisions student entitlements (chapters, subject packs, passes, bundles).
-    7. Marks WebhookEvent as processed.
+    Central, thread-safe, dual-path fulfillment engine.
+    Ensures that whether called by the frontend checkout callback or the asynchronous webhook
+    (or both concurrently), the order transition and entitlement provisioning happen exactly once.
     """
     from django.db import transaction
     from django.utils import timezone
     from apps.orders.models import Order
     from apps.payments.models import Payment
     from apps.entitlements.services import provision_order_entitlements
+
+    with transaction.atomic():
+        locked_order = Order.objects.select_for_update().filter(id=order.id).first()
+        if not locked_order:
+            return {
+                "success": False,
+                "error": "Order not found."
+            }
+
+        # Dual-Path Idempotency: if already PAID, return immediately without re-provisioning
+        if locked_order.status == Order.STATUS_PAID:
+            logger.info(f"Dual-path idempotency: Order {locked_order.order_number} is already PAID. Skipping duplicate fulfillment.")
+            if webhook_event:
+                webhook_event.is_processed = True
+                webhook_event.processed_at = timezone.now()
+                webhook_event.save(update_fields=['is_processed', 'processed_at'])
+            return {
+                "success": True,
+                "status": "already_paid",
+                "order_id": locked_order.id,
+                "order_number": locked_order.order_number,
+                "message": "Order is already fulfilled."
+            }
+
+        # Amount reconciliation: verify amount_paid == locked_order.net_payable_paise
+        if amount_paise is not None and int(amount_paise) != locked_order.net_payable_paise:
+            logger.critical(
+                f"SECURITY ALERT: Amount reconciliation mismatch! "
+                f"Order {locked_order.order_number}: expected {locked_order.net_payable_paise} paise, but received {amount_paise} paise!"
+            )
+            Payment.objects.update_or_create(
+                razorpay_payment_id=payment_id or f"failed_{uuid.uuid4().hex[:12]}",
+                defaults={
+                    'order': locked_order,
+                    'amount_paise': int(amount_paise) if amount_paise is not None else 0,
+                    'currency': currency,
+                    'payment_method': method,
+                    'status': Payment.STATUS_FAILED,
+                    'error_code': 'AMOUNT_MISMATCH',
+                    'error_description': f"Expected {locked_order.net_payable_paise} paise, but received {amount_paise} paise.",
+                }
+            )
+            return {
+                "success": False,
+                "error": f"Amount reconciliation mismatch: expected {locked_order.net_payable_paise} paise, got {amount_paise} paise."
+            }
+
+        # Record or update Payment record
+        Payment.objects.update_or_create(
+            razorpay_payment_id=payment_id,
+            defaults={
+                'order': locked_order,
+                'amount_paise': int(amount_paise) if amount_paise is not None else locked_order.net_payable_paise,
+                'currency': currency,
+                'payment_method': method,
+                'status': Payment.STATUS_CAPTURED,
+            }
+        )
+
+        # Atomically transition order status to PAID
+        locked_order.status = Order.STATUS_PAID
+        locked_order.save(update_fields=['status', 'updated_at'])
+
+        # Provision student entitlements
+        entitlements = provision_order_entitlements(locked_order)
+        logger.info(f"Granted {len(entitlements)} entitlements for Order {locked_order.order_number} to {locked_order.user.email}")
+
+        # Mark webhook event as processed if provided
+        if webhook_event:
+            webhook_event.is_processed = True
+            webhook_event.processed_at = timezone.now()
+            webhook_event.save(update_fields=['is_processed', 'processed_at'])
+
+        return {
+            "success": True,
+            "status": "fulfilled",
+            "order_id": locked_order.id,
+            "order_number": locked_order.order_number,
+            "entitlements_count": len(entitlements),
+            "message": "Payment verified and order fulfilled successfully."
+        }
+
+
+def handle_payment_captured(payload: dict, webhook_event=None) -> dict:
+    """
+    Fulfills order upon receiving payment.captured webhook:
+    1. Extracts payment entity and order ID.
+    2. Performs amount reconciliation and atomic row lock via fulfill_order_payment.
+    3. Handles dual-path idempotency: if order already PAID, skips duplicate fulfillment.
+    4. Transitions order.status = 'PAID'.
+    5. Records Payment record with status 'CAPTURED'.
+    6. Provisions student entitlements.
+    7. Marks WebhookEvent as processed.
+    """
+    from apps.orders.models import Order
 
     payment_entity = payload.get('payload', {}).get('payment', {}).get('entity', {})
     if not payment_entity:
@@ -154,93 +251,72 @@ def handle_payment_captured(payload: dict, webhook_event=None) -> dict:
     order_number = notes.get('order_number')
     order_id_fallback = notes.get('order_id')
 
-    with transaction.atomic():
-        # Find corresponding Order
-        order = None
-        if razorpay_order_id:
-            order = Order.objects.select_for_update().filter(razorpay_order_id=razorpay_order_id).first()
-        if not order and order_number:
-            order = Order.objects.select_for_update().filter(order_number=order_number).first()
-        if not order and order_id_fallback:
-            order = Order.objects.select_for_update().filter(id=order_id_fallback).first()
+    order = None
+    if razorpay_order_id:
+        order = Order.objects.filter(razorpay_order_id=razorpay_order_id).first()
+    if not order and order_number:
+        order = Order.objects.filter(order_number=order_number).first()
+    if not order and order_id_fallback:
+        order = Order.objects.filter(id=order_id_fallback).first()
 
-        if not order:
-            logger.error(f"Order not found for payment.captured: rzp_order={razorpay_order_id}, payment_id={payment_id}")
-            return {
-                "success": False,
-                "error": f"No order found matching Razorpay order ID '{razorpay_order_id}'."
-            }
-
-        # Amount reconciliation: verify amount_paid == order.net_payable_paise
-        if amount_paid is None or int(amount_paid) != order.net_payable_paise:
-            logger.critical(
-                f"SECURITY ALERT: Amount reconciliation mismatch! "
-                f"Order {order.order_number}: expected {order.net_payable_paise} paise, but received {amount_paid} paise!"
-            )
-            Payment.objects.update_or_create(
-                razorpay_payment_id=payment_id or f"failed_{uuid.uuid4().hex[:12]}",
-                defaults={
-                    'order': order,
-                    'amount_paise': int(amount_paid) if amount_paid is not None else 0,
-                    'currency': currency,
-                    'payment_method': method,
-                    'status': Payment.STATUS_FAILED,
-                    'error_code': 'AMOUNT_MISMATCH',
-                    'error_description': f"Expected {order.net_payable_paise} paise, but received {amount_paid} paise.",
-                }
-            )
-            return {
-                "success": False,
-                "error": f"Amount reconciliation mismatch: expected {order.net_payable_paise} paise, got {amount_paid} paise."
-            }
-
-        # Record or update Payment record
-        Payment.objects.update_or_create(
-            razorpay_payment_id=payment_id,
-            defaults={
-                'order': order,
-                'amount_paise': int(amount_paid),
-                'currency': currency,
-                'payment_method': method,
-                'status': Payment.STATUS_CAPTURED,
-            }
-        )
-
-        # Dual-Path Idempotency: if already PAID, avoid duplicate entitlement grants
-        if order.status == Order.STATUS_PAID:
-            logger.info(f"Order {order.order_number} is already PAID. Skipping duplicate fulfillment.")
-            if webhook_event:
-                webhook_event.is_processed = True
-                webhook_event.processed_at = timezone.now()
-                webhook_event.save(update_fields=['is_processed', 'processed_at'])
-            return {
-                "success": True,
-                "status": "already_paid",
-                "order_id": order.id,
-                "order_number": order.order_number,
-            }
-
-        # Atomically transition order status to PAID
-        order.status = Order.STATUS_PAID
-        order.save(update_fields=['status', 'updated_at'])
-
-        # Provision student entitlements
-        entitlements = provision_order_entitlements(order)
-        logger.info(f"Granted {len(entitlements)} entitlements for Order {order.order_number} to {order.user.email}")
-
-        # Mark webhook event as processed
-        if webhook_event:
-            webhook_event.is_processed = True
-            webhook_event.processed_at = timezone.now()
-            webhook_event.save(update_fields=['is_processed', 'processed_at'])
-
+    if not order:
+        logger.error(f"Order not found for payment.captured: rzp_order={razorpay_order_id}, payment_id={payment_id}")
         return {
-            "success": True,
-            "status": "fulfilled",
-            "order_id": order.id,
-            "order_number": order.order_number,
-            "entitlements_count": len(entitlements),
+            "success": False,
+            "error": f"No order found matching Razorpay order ID '{razorpay_order_id}'."
         }
+
+    return fulfill_order_payment(
+        order=order,
+        payment_id=payment_id,
+        amount_paise=amount_paid,
+        currency=currency,
+        method=method,
+        webhook_event=webhook_event
+    )
+
+
+def process_checkout_verification(user, razorpay_order_id: str, razorpay_payment_id: str, razorpay_signature: str) -> dict:
+    """
+    Dual-path checkout callback verification:
+    1. Cryptographically validates checkout signature (HMAC-SHA256).
+    2. Uses select_for_update row locking to ensure idempotency.
+    3. If order is already PAID, returns HTTP 200 immediately.
+    4. Otherwise, fulfills order and provisions entitlements exactly once.
+    """
+    from django.db import transaction
+    from apps.orders.models import Order
+
+    if not verify_razorpay_checkout_signature(razorpay_order_id, razorpay_payment_id, razorpay_signature):
+        logger.warning(f"Signature mismatch during checkout verification for order {razorpay_order_id}")
+        return {
+            "success": False,
+            "error": "Invalid payment signature."
+        }
+
+    with transaction.atomic():
+        order = Order.objects.select_for_update().filter(razorpay_order_id=razorpay_order_id).first()
+        if not order:
+            logger.error(f"Order not found for checkout verification: {razorpay_order_id}")
+            return {
+                "success": False,
+                "error": f"Order not found for Razorpay order ID '{razorpay_order_id}'."
+            }
+
+        # Check user ownership (allow staff/admin or order owner)
+        if user and not getattr(user, 'is_staff', False) and order.user != user:
+            return {
+                "success": False,
+                "error": "You do not have permission to verify this order."
+            }
+
+        return fulfill_order_payment(
+            order=order,
+            payment_id=razorpay_payment_id,
+            amount_paise=order.net_payable_paise,
+            currency='INR',
+            method='razorpay_checkout'
+        )
 
 
 def handle_payment_failed(payload: dict, webhook_event=None) -> dict:

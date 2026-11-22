@@ -9,6 +9,7 @@ from .services import (
     verify_razorpay_webhook_signature,
     handle_payment_captured,
     handle_payment_failed,
+    process_checkout_verification,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,3 +121,36 @@ class RazorpayWebhookView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class RazorpayPaymentVerifyView(APIView):
+    """
+    POST /api/v1/payments/verify/
+    Frontend checkout callback verification endpoint.
+    Verifies HMAC-SHA256 signature and fulfills order with dual-path idempotency.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        razorpay_order_id = request.data.get('razorpay_order_id')
+        razorpay_payment_id = request.data.get('razorpay_payment_id')
+        razorpay_signature = request.data.get('razorpay_signature')
+
+        if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
+            return Response(
+                {"error": "Missing required fields: razorpay_order_id, razorpay_payment_id, razorpay_signature."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        result = process_checkout_verification(
+            user=request.user,
+            razorpay_order_id=razorpay_order_id,
+            razorpay_payment_id=razorpay_payment_id,
+            razorpay_signature=razorpay_signature
+        )
+
+        if not result.get('success'):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(result, status=status.HTTP_200_OK)
+

@@ -607,4 +607,218 @@ class RazorpayWebhookAPITests(APITestCase):
         self.assertEqual(fail_record.error_code, 'GATEWAY_TIMEOUT')
 
 
+class DualPathIdempotencyAndVerificationTests(APITestCase):
+    """
+    Issue #34 & Issue #55:
+    Comprehensive tests for Dual-Path Idempotency and Checkout Signature Verification:
+    - Simultaneous or out-of-order arrival of checkout callback and webhook does not duplicate access.
+    - Database transactions (transaction.atomic() and select_for_update()).
+    - If order.status == 'PAID', returns HTTP 200 immediately.
+    - Processing the same order twice creates entitlements exactly once.
+    - Compares signatures using hmac.compare_digest.
+    - Rejects tampered signatures with HTTP 400 Bad Request.
+    """
+    def setUp(self):
+        self.webhook_secret = "test_webhook_secret_dual_path_123"
+        self.key_secret = "test_key_secret_dual_path_456"
+
+        self.user = User.objects.create_user(
+            email="dualpath_student@example.com",
+            full_name="Dual Path Student",
+            password="DualPathPassword@123"
+        )
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+
+        self.other_user = User.objects.create_user(
+            email="other_student@example.com",
+            full_name="Other Student",
+            password="OtherPassword@123"
+        )
+        self.other_token = str(RefreshToken.for_user(self.other_user).access_token)
+
+        self.board = Board.objects.create(name="Dual CBSE", slug="dual-cbse")
+        self.cls = ClassLevel.objects.create(board=self.board, name="Class 10", slug="class-10")
+        self.subject = Subject.objects.create(academic_class=self.cls, name="Physics", slug="physics")
+        self.chapter = Chapter.objects.create(
+            subject=self.subject,
+            title="Light & Optics",
+            chapter_number=1,
+            slug="light-and-optics-dual"
+        )
+        self.product = Product.objects.create(
+            title="Class 10 Physics Chapter 1",
+            slug="light-and-optics-dual-notes",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.chapter,
+            is_active=True
+        )
+        Price.objects.create(product=self.product, amount_paise=4900, is_current=True)
+
+        self.order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            razorpay_order_id="order_dualpath_777",
+            status=Order.STATUS_PENDING,
+            gross_amount_paise=4900,
+            net_payable_paise=4900
+        )
+        from apps.orders.models import OrderItem
+        self.order_item = OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            unit_price_paise=4900,
+            net_price_paise=4900
+        )
+
+    def _generate_checkout_signature(self, order_id: str, payment_id: str) -> str:
+        msg = f"{order_id}|{payment_id}".encode('utf-8')
+        return hmac.new(self.key_secret.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+    def _generate_webhook_signature(self, raw_body: bytes) -> str:
+        return hmac.new(self.webhook_secret.encode('utf-8'), raw_body, hashlib.sha256).hexdigest()
+
+    def _send_webhook(self, payment_id="pay_dual_123"):
+        payload = {
+            "entity": "event",
+            "event": "payment.captured",
+            "id": f"evt_{payment_id}",
+            "payload": {
+                "payment": {
+                    "entity": {
+                        "id": payment_id,
+                        "amount": 4900,
+                        "currency": "INR",
+                        "status": "captured",
+                        "order_id": self.order.razorpay_order_id,
+                        "method": "card",
+                    }
+                }
+            }
+        }
+        raw_body = json.dumps(payload).encode('utf-8')
+        sig = self._generate_webhook_signature(raw_body)
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            return self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=sig
+            )
+
+    def _send_verify(self, payment_id="pay_dual_123", signature=None, auth_token=None):
+        if signature is None:
+            signature = self._generate_checkout_signature(self.order.razorpay_order_id, payment_id)
+
+        token = auth_token if auth_token is not None else self.token
+        headers = {}
+        if token:
+            headers['HTTP_AUTHORIZATION'] = f'Bearer {token}'
+
+        with patch.object(settings, 'RAZORPAY_KEY_SECRET', self.key_secret):
+            return self.client.post(
+                '/api/v1/payments/verify/',
+                data={
+                    "razorpay_order_id": self.order.razorpay_order_id,
+                    "razorpay_payment_id": payment_id,
+                    "razorpay_signature": signature
+                },
+                format='json',
+                **headers
+            )
+
+    def test_checkout_verify_valid_signature_fulfills_order_and_grants_entitlements(self):
+        """Issue #55: Checkout verification with valid HMAC-SHA256 signature."""
+        resp = self._send_verify(payment_id="pay_verify_valid_001")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['status'], 'fulfilled')
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PAID)
+
+        entitlements = Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id)
+        self.assertEqual(entitlements.count(), 1)
+
+    def test_checkout_verify_tampered_signature_rejected(self):
+        """Issue #55: Rejects tampered signature with HTTP 400 Bad Request."""
+        resp = self._send_verify(payment_id="pay_verify_tampered_002", signature="invalid_fake_signature_999")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid payment signature", str(resp.data))
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PENDING)
+
+        entitlements = Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id)
+        self.assertEqual(entitlements.count(), 0)
+
+    def test_dual_path_idempotency_webhook_first_then_verify(self):
+        """Issue #34: Webhook arrives first, then frontend verify arrives second."""
+        # Step 1: Webhook arrives
+        wh_resp = self._send_webhook(payment_id="pay_flow1_wh")
+        self.assertEqual(wh_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(wh_resp.data['result']['status'], 'fulfilled')
+
+        # Check order paid and 1 entitlement created
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PAID)
+        self.assertEqual(Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id).count(), 1)
+
+        # Step 2: Checkout verify arrives second
+        vf_resp = self._send_verify(payment_id="pay_flow1_vf")
+        self.assertEqual(vf_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(vf_resp.data['status'], 'already_paid')
+
+        # Criteria: Entitlements must remain EXACTLY 1 (no duplicates)
+        self.assertEqual(Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id).count(), 1)
+
+    def test_dual_path_idempotency_verify_first_then_webhook(self):
+        """Issue #34: Frontend verify arrives first, then webhook arrives second."""
+        # Step 1: Checkout verify arrives first
+        vf_resp = self._send_verify(payment_id="pay_flow2_vf")
+        self.assertEqual(vf_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(vf_resp.data['status'], 'fulfilled')
+
+        # Check order paid and 1 entitlement created
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PAID)
+        self.assertEqual(Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id).count(), 1)
+
+        # Step 2: Webhook arrives second
+        wh_resp = self._send_webhook(payment_id="pay_flow2_wh")
+        self.assertEqual(wh_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(wh_resp.data['result']['status'], 'already_paid')
+
+        # Criteria: Entitlements must remain EXACTLY 1 (no duplicates)
+        self.assertEqual(Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id).count(), 1)
+
+    def test_processing_same_order_twice_creates_entitlements_exactly_once(self):
+        """Issue #34 Acceptance Criteria: Processing the same order twice creates entitlements exactly once."""
+        # 1st processing
+        wh_resp1 = self._send_webhook(payment_id="pay_dup_001")
+        self.assertEqual(wh_resp1.status_code, status.HTTP_200_OK)
+        self.assertEqual(wh_resp1.data['result']['status'], 'fulfilled')
+
+        # 2nd processing of identical order
+        wh_resp2 = self._send_webhook(payment_id="pay_dup_002")
+        self.assertEqual(wh_resp2.status_code, status.HTTP_200_OK)
+        self.assertEqual(wh_resp2.data['result']['status'], 'already_paid')
+
+        # Must have exactly 1 entitlement
+        self.assertEqual(
+            Entitlement.objects.filter(user=self.user, product_type='CHAPTER', scope_id=self.chapter.id).count(),
+            1
+        )
+
+    def test_verify_endpoint_requires_authentication(self):
+        """Unauthorized requests to /api/v1/payments/verify/ return 401."""
+        resp = self._send_verify(payment_id="pay_no_auth", auth_token="")
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_verify_endpoint_rejects_unauthorized_user(self):
+        """A user cannot verify an order belonging to another user."""
+        resp = self._send_verify(payment_id="pay_wrong_user", auth_token=self.other_token)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("permission", str(resp.data))
+
+
+
 
