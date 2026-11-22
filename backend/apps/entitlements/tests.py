@@ -385,3 +385,183 @@ class EntitlementModelAndStateManagementTests(TestCase):
         self.assertTrue(entitlement.is_currently_active)
 
 
+class AtomicOrderFulfillmentEntitlementTests(TestCase):
+    """
+    Issue #36: Atomic order fulfillment service provisioning entitlements.
+    Acceptance Criteria:
+    - [x] Provisions Lifetime access for Chapter Notes, Subject Packs, and Bundles.
+    - [x] Provisions Time-Bound access for Monthly and Annual passes.
+    """
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="fulfill_student@example.com",
+            password="StrongPassword123!",
+            role="STUDENT"
+        )
+        self.board = Board.objects.create(name="CBSE FulFill", slug="cbse-fulfill")
+        self.cls = ClassLevel.objects.create(board=self.board, name="Class 10", slug="c10-fulfill")
+        self.subject = Subject.objects.create(academic_class=self.cls, name="Biology", slug="bio-fulfill")
+        self.chapter = Chapter.objects.create(subject=self.subject, chapter_number=1, title="Life Processes", slug="life-proc")
+
+        # Products
+        self.prod_ch = Product.objects.create(
+            title="Life Processes Notes",
+            slug="life-proc-notes",
+            product_type=Product.PRODUCT_TYPE_CHAPTER_NOTES,
+            chapter=self.chapter,
+            is_active=True
+        )
+        self.prod_sub = Product.objects.create(
+            title="Class 10 Biology Pack",
+            slug="c10-bio-pack",
+            product_type=Product.PRODUCT_TYPE_SUBJECT_PACK,
+            subject=self.subject,
+            is_active=True
+        )
+        self.prod_monthly = Product.objects.create(
+            title="Class 10 Monthly Pass",
+            slug="c10-monthly-pass",
+            product_type=Product.PRODUCT_TYPE_MONTHLY_PASS,
+            academic_class=self.cls,
+            board=self.board,
+            is_active=True
+        )
+        self.prod_annual = Product.objects.create(
+            title="Class 10 Annual Pass",
+            slug="c10-annual-pass",
+            product_type=Product.PRODUCT_TYPE_ANNUAL_PASS,
+            academic_class=self.cls,
+            board=self.board,
+            is_active=True
+        )
+        self.prod_bundle = Product.objects.create(
+            title="Class 10 Science Combo",
+            slug="c10-science-combo",
+            product_type=Product.PRODUCT_TYPE_BUNDLE,
+            is_active=True
+        )
+        self.prod_bundle.bundle_items.create(target_type='SUBJECT', subject=self.subject)
+        self.prod_bundle.bundle_items.create(target_type='CHAPTER', chapter=self.chapter)
+
+    def test_provisions_lifetime_access_for_chapter_notes(self):
+        from apps.orders.models import Order, OrderItem
+        from apps.entitlements.services import provision_order_entitlements
+
+        order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            status=Order.STATUS_PAID,
+            gross_amount_paise=4900,
+            net_payable_paise=4900
+        )
+        OrderItem.objects.create(order=order, product=self.prod_ch, unit_price_paise=4900, net_price_paise=4900)
+
+        entitlements = provision_order_entitlements(order)
+        self.assertEqual(len(entitlements), 1)
+        ent = entitlements[0]
+        self.assertEqual(ent.product_type, 'CHAPTER')
+        self.assertEqual(ent.scope_id, self.chapter.id)
+        self.assertEqual(ent.access_type, 'LIFETIME')
+        self.assertIsNone(ent.valid_until)
+        self.assertEqual(ent.status, 'ACTIVE')
+
+    def test_provisions_lifetime_access_for_subject_pack(self):
+        from apps.orders.models import Order, OrderItem
+        from apps.entitlements.services import provision_order_entitlements
+
+        order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            status=Order.STATUS_PAID,
+            gross_amount_paise=19900,
+            net_payable_paise=19900
+        )
+        OrderItem.objects.create(order=order, product=self.prod_sub, unit_price_paise=19900, net_price_paise=19900)
+
+        entitlements = provision_order_entitlements(order)
+        self.assertEqual(len(entitlements), 1)
+        ent = entitlements[0]
+        self.assertEqual(ent.product_type, 'SUBJECT')
+        self.assertEqual(ent.scope_id, self.subject.id)
+        self.assertEqual(ent.access_type, 'LIFETIME')
+        self.assertIsNone(ent.valid_until)
+        self.assertEqual(ent.status, 'ACTIVE')
+
+    def test_provisions_lifetime_access_for_bundle(self):
+        from apps.orders.models import Order, OrderItem
+        from apps.entitlements.services import provision_order_entitlements
+
+        order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            status=Order.STATUS_PAID,
+            gross_amount_paise=29900,
+            net_payable_paise=29900
+        )
+        OrderItem.objects.create(order=order, product=self.prod_bundle, unit_price_paise=29900, net_price_paise=29900)
+
+        entitlements = provision_order_entitlements(order)
+        # Bundle itself + 1 subject + 1 chapter = 3 entitlements
+        self.assertEqual(len(entitlements), 3)
+        bundle_ent = next(e for e in entitlements if e.product_type == 'BUNDLE')
+        self.assertEqual(bundle_ent.access_type, 'LIFETIME')
+        self.assertEqual(bundle_ent.status, 'ACTIVE')
+
+        sub_ent = next(e for e in entitlements if e.product_type == 'SUBJECT')
+        self.assertEqual(sub_ent.scope_id, self.subject.id)
+        self.assertEqual(sub_ent.access_type, 'LIFETIME')
+
+        ch_ent = next(e for e in entitlements if e.product_type == 'CHAPTER')
+        self.assertEqual(ch_ent.scope_id, self.chapter.id)
+        self.assertEqual(ch_ent.access_type, 'LIFETIME')
+
+    def test_provisions_time_bound_access_for_monthly_pass(self):
+        from apps.orders.models import Order, OrderItem
+        from apps.entitlements.services import provision_order_entitlements
+
+        order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            status=Order.STATUS_PAID,
+            gross_amount_paise=29900,
+            net_payable_paise=29900
+        )
+        OrderItem.objects.create(order=order, product=self.prod_monthly, unit_price_paise=29900, net_price_paise=29900)
+
+        entitlements = provision_order_entitlements(order)
+        self.assertEqual(len(entitlements), 1)
+        ent = entitlements[0]
+        self.assertEqual(ent.product_type, 'CLASS_PASS')
+        self.assertEqual(ent.scope_id, self.cls.id)
+        self.assertEqual(ent.access_type, 'TIME_BOUND')
+        self.assertIsNotNone(ent.valid_until)
+        days = round((ent.valid_until - ent.valid_from).total_seconds() / 86400)
+        self.assertEqual(days, 30)
+        self.assertTrue(ent.is_currently_active)
+
+    def test_provisions_time_bound_access_for_annual_pass(self):
+        from apps.orders.models import Order, OrderItem
+        from apps.entitlements.services import provision_order_entitlements
+
+        order = Order.objects.create(
+            user=self.user,
+            order_number=Order.generate_order_number(),
+            status=Order.STATUS_PAID,
+            gross_amount_paise=249900,
+            net_payable_paise=249900
+        )
+        OrderItem.objects.create(order=order, product=self.prod_annual, unit_price_paise=249900, net_price_paise=249900)
+
+        entitlements = provision_order_entitlements(order)
+        self.assertEqual(len(entitlements), 1)
+        ent = entitlements[0]
+        self.assertEqual(ent.product_type, 'CLASS_PASS')
+        self.assertEqual(ent.scope_id, self.cls.id)
+        self.assertEqual(ent.access_type, 'TIME_BOUND')
+        self.assertIsNotNone(ent.valid_until)
+        days = round((ent.valid_until - ent.valid_from).total_seconds() / 86400)
+        self.assertEqual(days, 365)
+        self.assertTrue(ent.is_currently_active)
+
+
+

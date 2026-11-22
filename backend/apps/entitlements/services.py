@@ -195,19 +195,21 @@ def provision_order_entitlements(order) -> list:
             )
             created_entitlements.append(ent)
             for bundle_item in prod.bundle_items.all():
-                if bundle_item.target_type == 'SUBJECT' and bundle_item.target_id:
+                target_sub_id = bundle_item.subject_id or getattr(bundle_item, 'target_id', None)
+                target_ch_id = bundle_item.chapter_id or getattr(bundle_item, 'target_id', None)
+                if bundle_item.target_type == 'SUBJECT' and target_sub_id:
                     sub_ent, _ = Entitlement.objects.get_or_create(
                         user=user,
                         product_type='SUBJECT',
-                        scope_id=bundle_item.target_id,
+                        scope_id=target_sub_id,
                         defaults={'access_type': 'LIFETIME', 'status': 'ACTIVE', 'order': order}
                     )
                     created_entitlements.append(sub_ent)
-                elif bundle_item.target_type == 'CHAPTER' and bundle_item.target_id:
+                elif bundle_item.target_type == 'CHAPTER' and target_ch_id:
                     ch_ent, _ = Entitlement.objects.get_or_create(
                         user=user,
                         product_type='CHAPTER',
-                        scope_id=bundle_item.target_id,
+                        scope_id=target_ch_id,
                         defaults={'access_type': 'LIFETIME', 'status': 'ACTIVE', 'order': order}
                     )
                     created_entitlements.append(ch_ent)
