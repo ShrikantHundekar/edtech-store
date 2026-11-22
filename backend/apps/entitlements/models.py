@@ -3,6 +3,26 @@ from django.conf import settings
 from django.utils import timezone
 
 
+class EntitlementQuerySet(models.QuerySet):
+    """
+    Custom QuerySet for fast, indexed authorization queries.
+    """
+    def active(self):
+        now = timezone.now()
+        return self.filter(status='ACTIVE').filter(
+            models.Q(access_type='LIFETIME') | models.Q(access_type='TIME_BOUND', valid_until__gt=now)
+        )
+
+    def for_user(self, user):
+        return self.filter(user=user)
+
+    def is_entitled(self, user, product_type: str, scope_id: int) -> bool:
+        return self.for_user(user).active().filter(
+            product_type=product_type,
+            scope_id=scope_id
+        ).exists()
+
+
 class Entitlement(models.Model):
     """
     Represents an access license/entitlement granted to a student
@@ -74,6 +94,8 @@ class Entitlement(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = EntitlementQuerySet.as_manager()
+
     class Meta:
         db_table = 'entitlements'
         ordering = ['-created_at']
@@ -83,6 +105,7 @@ class Entitlement(models.Model):
             models.Index(fields=['user', 'status']),
             models.Index(fields=['product_type', 'scope_id']),
             models.Index(fields=['valid_until']),
+            models.Index(fields=['user', 'status', 'product_type', 'scope_id'], name='entitlements_auth_check_idx'),
         ]
 
     def __str__(self):

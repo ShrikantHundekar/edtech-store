@@ -279,3 +279,109 @@ class TimeBoundPassValidityTests(APITestCase):
         self.assertEqual(resp_calc.status_code, status.HTTP_200_OK)
         self.assertTrue(resp_calc.data['renewal_preview']['is_renewal'])
 
+
+class EntitlementModelAndStateManagementTests(TestCase):
+    """
+    Issue #35: Entitlements database model and state management:
+    - User content licenses decoupled from orders.
+    - Schema Fields: user_id, product_type (CHAPTER, SUBJECT, CLASS_PASS, BUNDLE),
+      scope_id, access_type (LIFETIME, TIME_BOUND), valid_from, valid_until,
+      status (ACTIVE, EXPIRED, REVOKED).
+    - Direct entitlement queries used for fast, indexed authorization checks.
+    """
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="entitlement_model_test@example.com",
+            password="StrongPassword123!",
+            role="STUDENT"
+        )
+
+    def test_lifetime_access_entitlement_state(self):
+        """Lifetime access has no expiration and is currently active."""
+        entitlement = Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=101,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+        self.assertEqual(entitlement.access_type, 'LIFETIME')
+        self.assertIsNone(entitlement.valid_until)
+        self.assertTrue(entitlement.is_currently_active)
+
+    def test_time_bound_access_active_vs_expired(self):
+        """Time-bound access is active before expiration and inactive after expiration."""
+        now = timezone.now()
+        active_entitlement = Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=10,
+            access_type='TIME_BOUND',
+            valid_from=now - timedelta(days=1),
+            valid_until=now + timedelta(days=29),
+            status='ACTIVE'
+        )
+        self.assertTrue(active_entitlement.is_currently_active)
+
+        expired_entitlement = Entitlement.objects.create(
+            user=self.user,
+            product_type='CLASS_PASS',
+            scope_id=12,
+            access_type='TIME_BOUND',
+            valid_from=now - timedelta(days=40),
+            valid_until=now - timedelta(days=10),
+            status='ACTIVE'
+        )
+        self.assertFalse(expired_entitlement.is_currently_active)
+
+    def test_revoked_status_state(self):
+        """Revoked entitlement returns False for is_currently_active regardless of access_type."""
+        entitlement = Entitlement.objects.create(
+            user=self.user,
+            product_type='SUBJECT',
+            scope_id=202,
+            access_type='LIFETIME',
+            status='REVOKED'
+        )
+        self.assertEqual(entitlement.status, 'REVOKED')
+        self.assertFalse(entitlement.is_currently_active)
+
+    def test_direct_entitlement_queryset_authorization(self):
+        """Direct queries using active(), for_user(), and is_entitled() for fast authorization."""
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=301,
+            access_type='LIFETIME',
+            status='ACTIVE'
+        )
+        Entitlement.objects.create(
+            user=self.user,
+            product_type='SUBJECT',
+            scope_id=401,
+            access_type='LIFETIME',
+            status='REVOKED'
+        )
+
+        # Direct authorization check via custom manager
+        self.assertTrue(Entitlement.objects.is_entitled(self.user, 'CHAPTER', 301))
+        self.assertFalse(Entitlement.objects.is_entitled(self.user, 'SUBJECT', 401))
+        self.assertFalse(Entitlement.objects.is_entitled(self.user, 'CHAPTER', 999))
+
+        active_count = Entitlement.objects.for_user(self.user).active().count()
+        self.assertEqual(active_count, 1)
+
+    def test_entitlement_decoupled_from_order(self):
+        """Entitlement can be created without an order (e.g. manual administrative grant)."""
+        entitlement = Entitlement.objects.create(
+            user=self.user,
+            product_type='BUNDLE',
+            scope_id=501,
+            access_type='LIFETIME',
+            order=None,
+            status='ACTIVE'
+        )
+        self.assertIsNone(entitlement.order)
+        self.assertTrue(entitlement.is_currently_active)
+
+
