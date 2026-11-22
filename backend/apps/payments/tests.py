@@ -480,4 +480,131 @@ class RazorpayWebhookAPITests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Malformed JSON payload", str(resp.data))
 
+    def test_payment_failed_webhook_records_failure_and_sets_order_failed(self):
+        """
+        Issue #33 Acceptance Criteria:
+        - Records failure code and description in payments table.
+        - Sets order.status = 'FAILED'.
+        - Ensures zero entitlements are granted.
+        """
+        failed_event_id = "evt_fail_99999"
+        failed_payload = {
+            "entity": "event",
+            "account_id": "acc_test123",
+            "event": "payment.failed",
+            "id": failed_event_id,
+            "contains": ["payment"],
+            "payload": {
+                "payment": {
+                    "entity": {
+                        "id": "pay_fail_decline_789",
+                        "entity": "payment",
+                        "amount": 4900,
+                        "currency": "INR",
+                        "status": "failed",
+                        "order_id": "order_test_order_777",
+                        "method": "card",
+                        "error_code": "BAD_REQUEST_ERROR",
+                        "error_description": "Card was declined by issuing bank",
+                        "error_source": "bank",
+                        "error_step": "payment_authorization",
+                        "error_reason": "payment_declined",
+                    }
+                }
+            },
+            "created_at": 1700000000
+        }
+
+        raw_body = json.dumps(failed_payload).encode('utf-8')
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.data
+        self.assertEqual(data['status'], 'processed')
+        self.assertEqual(data['event_type'], 'payment.failed')
+        self.assertEqual(data['result']['order_status'], Order.STATUS_FAILED)
+        self.assertEqual(data['result']['error_code'], 'BAD_REQUEST_ERROR')
+
+        # Criteria: Sets order.status = 'FAILED'
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_FAILED)
+
+        # Criteria: Records failure code and description in payments table
+        failed_payment = Payment.objects.filter(razorpay_payment_id='pay_fail_decline_789').first()
+        self.assertIsNotNone(failed_payment)
+        self.assertEqual(failed_payment.status, Payment.STATUS_FAILED)
+        self.assertEqual(failed_payment.error_code, 'BAD_REQUEST_ERROR')
+        self.assertEqual(failed_payment.error_description, 'Card was declined by issuing bank')
+
+        # Criteria: Ensures zero entitlements are granted
+        has_entitlements = Entitlement.objects.filter(
+            user=self.user,
+            product_type='CHAPTER',
+            scope_id=self.chapter.id
+        ).exists()
+        self.assertFalse(has_entitlements, "Zero entitlements must be granted for failed payment")
+
+        # Webhook event marked processed
+        saved_event = WebhookEvent.objects.get(event_id=failed_event_id)
+        self.assertTrue(saved_event.is_processed)
+
+    def test_payment_failed_does_not_override_already_paid_order(self):
+        """
+        Dual-path idempotency: If an order was already marked PAID,
+        a delayed payment.failed event logs the failure attempt in payments,
+        but does not revoke the PAID status of the order.
+        """
+        self.order.status = Order.STATUS_PAID
+        self.order.save()
+
+        failed_event_id = "evt_fail_late_arrival"
+        failed_payload = {
+            "entity": "event",
+            "event": "payment.failed",
+            "id": failed_event_id,
+            "payload": {
+                "payment": {
+                    "entity": {
+                        "id": "pay_late_fail_111",
+                        "amount": 4900,
+                        "order_id": "order_test_order_777",
+                        "error_code": "GATEWAY_TIMEOUT",
+                        "error_description": "Gateway timed out",
+                    }
+                }
+            }
+        }
+
+        raw_body = json.dumps(failed_payload).encode('utf-8')
+        valid_signature = self._generate_signature(raw_body)
+
+        with patch.object(settings, 'RAZORPAY_WEBHOOK_SECRET', self.webhook_secret):
+            resp = self.client.post(
+                '/api/v1/payments/webhook/',
+                data=raw_body,
+                content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=valid_signature
+            )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        # Order must remain PAID
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.STATUS_PAID)
+
+        # Failure attempt is recorded in payments table for audit
+        fail_record = Payment.objects.filter(razorpay_payment_id='pay_late_fail_111').first()
+        self.assertIsNotNone(fail_record)
+        self.assertEqual(fail_record.status, Payment.STATUS_FAILED)
+        self.assertEqual(fail_record.error_code, 'GATEWAY_TIMEOUT')
+
+
 

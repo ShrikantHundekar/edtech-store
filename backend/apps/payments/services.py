@@ -242,3 +242,87 @@ def handle_payment_captured(payload: dict, webhook_event=None) -> dict:
             "entitlements_count": len(entitlements),
         }
 
+
+def handle_payment_failed(payload: dict, webhook_event=None) -> dict:
+    """
+    Handles payment.failed webhook event:
+    1. Extracts failure code, description, and order reference.
+    2. Records failed attempt in the payments table with error details.
+    3. If order is in PENDING status, transitions order.status = 'FAILED'.
+    4. Ensures zero entitlements are granted to the user.
+    5. Marks webhook_event as processed.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+    from apps.orders.models import Order
+    from apps.payments.models import Payment
+
+    payment_entity = payload.get('payload', {}).get('payment', {}).get('entity', {})
+    if not payment_entity:
+        payment_entity = payload.get('payment', {})
+
+    payment_id = payment_entity.get('id')
+    razorpay_order_id = payment_entity.get('order_id')
+    amount = payment_entity.get('amount') or 0
+    currency = payment_entity.get('currency', 'INR')
+    method = payment_entity.get('method', '')
+    error_code = payment_entity.get('error_code', 'PAYMENT_FAILED')
+    error_description = payment_entity.get('error_description', 'Payment failed or was declined.')
+
+    notes = payment_entity.get('notes', {}) or {}
+    order_number = notes.get('order_number')
+    order_id_fallback = notes.get('order_id')
+
+    with transaction.atomic():
+        order = None
+        if razorpay_order_id:
+            order = Order.objects.select_for_update().filter(razorpay_order_id=razorpay_order_id).first()
+        if not order and order_number:
+            order = Order.objects.select_for_update().filter(order_number=order_number).first()
+        if not order and order_id_fallback:
+            order = Order.objects.select_for_update().filter(id=order_id_fallback).first()
+
+        if not order:
+            logger.error(f"Order not found for payment.failed: rzp_order={razorpay_order_id}, payment_id={payment_id}")
+            return {
+                "success": False,
+                "error": f"No order found matching Razorpay order ID '{razorpay_order_id}'."
+            }
+
+        # Record failed transaction in payments table
+        Payment.objects.update_or_create(
+            razorpay_payment_id=payment_id or f"failed_{uuid.uuid4().hex[:12]}",
+            defaults={
+                'order': order,
+                'amount_paise': int(amount),
+                'currency': currency,
+                'payment_method': method,
+                'status': Payment.STATUS_FAILED,
+                'error_code': error_code,
+                'error_description': error_description,
+            }
+        )
+
+        # Only transition to FAILED if order is not already PAID
+        if order.status == Order.STATUS_PENDING:
+            order.status = Order.STATUS_FAILED
+            order.save(update_fields=['status', 'updated_at'])
+            logger.info(f"Order {order.order_number} marked as FAILED due to {error_code}: {error_description}")
+
+        # Mark webhook event as processed
+        if webhook_event:
+            webhook_event.is_processed = True
+            webhook_event.processed_at = timezone.now()
+            webhook_event.save(update_fields=['is_processed', 'processed_at'])
+
+        return {
+            "success": True,
+            "status": "failed_recorded",
+            "order_id": order.id,
+            "order_number": order.order_number,
+            "order_status": order.status,
+            "error_code": error_code,
+            "error_description": error_description,
+        }
+
+
