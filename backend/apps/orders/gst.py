@@ -80,3 +80,18 @@ def calculate_inclusive_gst(price_inclusive_paise: int, is_interstate: bool = Fa
 def calculate_gst_breakdown(price_inclusive_paise: int) -> dict:
     """Alias for backwards compatibility with products and cart modules."""
     return calculate_inclusive_gst(price_inclusive_paise, is_interstate=False)
+
+
+def verify_gst_split_integrity(max_price_paise: int = 100000, step: int = 100) -> bool:
+    """
+    Verifies that base_taxable_paise + total_gst_paise == price_inclusive_paise across price points
+    with zero rounding leakage.
+    """
+    for price in range(0, max_price_paise + 1, step):
+        res = calculate_inclusive_gst(price)
+        if res['base_taxable_paise'] + res['total_gst_paise'] != price:
+            return False
+        if res['cgst_paise'] + res['sgst_paise'] != res['total_gst_paise']:
+            return False
+    return True
+
