@@ -46,6 +46,17 @@ export const Navbar: React.FC = () => {
               Curriculum Store
             </Link>
 
+            <Link
+              to="/products"
+              className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                isActive('/products') || location.pathname.startsWith('/products/')
+                  ? 'text-indigo-600 bg-indigo-50/70'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              All Products
+            </Link>
+
             {isAuthenticated && (
               <>
                 <Link
@@ -164,6 +175,13 @@ export const Navbar: React.FC = () => {
             className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
           >
             Curriculum Store
+          </Link>
+          <Link
+            to="/products"
+            onClick={() => setMobileMenuOpen(false)}
+            className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            All Products
           </Link>
           {isAuthenticated && (
             <>

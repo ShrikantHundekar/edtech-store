@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { Navbar } from './components/layout/Navbar';
 import { CatalogPage } from './pages/catalog/CatalogPage';
+import { ProductListPage } from './pages/products/ProductListPage';
+import { ProductDetailPage } from './pages/products/ProductDetailPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { ProfilePage } from './pages/auth/ProfilePage';
@@ -19,6 +21,8 @@ export const App: React.FC = () => {
               {/* Public Curriculum Catalog Routes */}
               <Route path="/" element={<CatalogPage />} />
               <Route path="/catalog" element={<CatalogPage />} />
+              <Route path="/products" element={<ProductListPage />} />
+              <Route path="/products/:id" element={<ProductDetailPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
 
