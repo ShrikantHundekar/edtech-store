@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { productService } from '../../services/productService';
 import { useAuth } from '../../context/AuthContext';
+import { useCart } from '../../context/CartContext';
 import type {
   Product,
   ProductOwnershipResponse,
@@ -27,6 +28,7 @@ export const ProductDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
+  const { addToCart } = useCart();
 
   const [product, setProduct] = useState<Product | null>(null);
   const [ownership, setOwnership] = useState<ProductOwnershipResponse | null>(null);
@@ -111,17 +113,13 @@ export const ProductDetailPage: React.FC = () => {
   const gst = priceCalc?.gst_breakdown || product.gst_breakdown;
 
   const handleAddToCart = () => {
-    // Add to cart local storage / cart context
-    const existing = JSON.parse(localStorage.getItem('cart_items') || '[]');
-    if (!existing.includes(product.id)) {
-      existing.push(product.id);
-      localStorage.setItem('cart_items', JSON.stringify(existing));
-    }
+    addToCart(product.id);
     navigate('/cart');
   };
 
   const handleBuyNow = () => {
-    handleAddToCart();
+    addToCart(product.id);
+    navigate('/cart');
   };
 
   return (

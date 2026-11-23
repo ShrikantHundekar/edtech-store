@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useCart } from '../../context/CartContext';
 import { BookOpen, ShoppingCart, LogOut, Menu, X, Shield, Clock } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
+  const { itemCount } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -104,6 +106,11 @@ export const Navbar: React.FC = () => {
               title="Shopping Cart"
             >
               <ShoppingCart className="w-5 h-5" />
+              {itemCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-600 text-white rounded-full text-[10px] font-black flex items-center justify-center shadow-xs animate-in zoom-in-50">
+                  {itemCount > 9 ? '9+' : itemCount}
+                </span>
+              )}
             </Link>
 
             {isAuthenticated && user ? (
@@ -153,8 +160,13 @@ export const Navbar: React.FC = () => {
 
           {/* Mobile menu toggle button */}
           <div className="flex md:hidden items-center space-x-2">
-            <Link to="/cart" className="p-2 text-slate-600 hover:text-indigo-600">
+            <Link to="/cart" className="p-2 text-slate-600 hover:text-indigo-600 relative">
               <ShoppingCart className="w-5 h-5" />
+              {itemCount > 0 && (
+                <span className="absolute top-0 right-0 w-4 h-4 bg-indigo-600 text-white rounded-full text-[9px] font-black flex items-center justify-center">
+                  {itemCount}
+                </span>
+              )}
             </Link>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
