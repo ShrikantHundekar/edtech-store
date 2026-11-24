@@ -154,3 +154,63 @@ class RazorpayPaymentVerifyView(APIView):
 
         return Response(result, status=status.HTTP_200_OK)
 
+
+class RazorpayPaymentSimulateView(APIView):
+    """
+    POST /api/v1/payments/simulate/
+    Available for testing/dev environments to simulate realistic Razorpay checkout callbacks (UPI & Card).
+    Returns cryptographically valid HMAC-SHA256 signature for testing verify endpoint.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        import uuid
+        import hmac
+        from django.conf import settings
+        from django.shortcuts import get_object_or_404
+        from apps.orders.models import Order
+
+        razorpay_order_id = request.data.get('razorpay_order_id')
+        method = request.data.get('method', 'upi')
+        should_fail = request.data.get('fail', False)
+
+        if not razorpay_order_id:
+            return Response(
+                {"error": "Missing razorpay_order_id."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        order = get_object_or_404(Order, razorpay_order_id=razorpay_order_id)
+        if order.user != request.user and not request.user.is_staff:
+            return Response(
+                {"error": "Permission denied for this order."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if should_fail:
+            return Response(
+                {
+                    "success": False,
+                    "error": "Payment was declined by the bank (Simulated Failure).",
+                    "code": "PAYMENT_DECLINED"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        payment_id = f"pay_sim_{method}_{uuid.uuid4().hex[:10]}"
+        key_secret = getattr(settings, 'RAZORPAY_KEY_SECRET', '')
+        message = f"{razorpay_order_id}|{payment_id}".encode('utf-8')
+        signature = hmac.new(key_secret.encode('utf-8'), message, hashlib.sha256).hexdigest()
+
+        return Response(
+            {
+                "success": True,
+                "razorpay_order_id": razorpay_order_id,
+                "razorpay_payment_id": payment_id,
+                "razorpay_signature": signature,
+                "method": method,
+            },
+            status=status.HTTP_200_OK
+        )
+
+
