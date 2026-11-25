@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/v1/auth/', include('apps.accounts.urls')),
     path('api/v1/admin/', include('apps.catalog.admin_urls')),
     path('api/v1/admin/entitlements/', include('apps.entitlements.admin_urls')),
+    path('api/v1/entitlements/', include('apps.entitlements.urls')),
     path('api/v1/catalog/', include('apps.catalog.public_urls')),
     path('api/v1/materials/', include('apps.catalog.material_urls')),
     path('api/v1/products/', include('apps.products.urls')),

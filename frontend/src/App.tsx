@@ -8,6 +8,7 @@ import { ProductListPage } from './pages/products/ProductListPage';
 import { ProductDetailPage } from './pages/products/ProductDetailPage';
 import { CartPage } from './pages/cart/CartPage';
 import { CheckoutPage } from './pages/checkout/CheckoutPage';
+import { LibraryPage } from './pages/library/LibraryPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { ProfilePage } from './pages/auth/ProfilePage';
@@ -32,6 +33,14 @@ export const App: React.FC = () => {
                 <Route path="/register" element={<RegisterPage />} />
 
                 {/* Protected Student Routes */}
+                <Route
+                  path="/library"
+                  element={
+                    <ProtectedRoute>
+                      <LibraryPage />
+                    </ProtectedRoute>
+                  }
+                />
                 <Route
                   path="/checkout"
                   element={

@@ -303,3 +303,257 @@ def manual_revoke_entitlement(admin_user, entitlement_id: int, reason: str) -> t
     return entitlement, log
 
 
+def get_student_library_data(user) -> dict:
+    """
+    Returns complete personalized student library hub data:
+    1. Active & historical class passes with live countdown metrics.
+    2. Owned chapters (direct purchase, subject pack unlock, or active class pass unlock).
+    3. Owned subject packs and bundles.
+    4. Attached downloadable/streamable study materials with protected stream URLs.
+    """
+    from django.db.models import Q
+    from apps.catalog.models import Chapter, Subject, ClassLevel
+    from apps.entitlements.models import Entitlement
+
+    now = timezone.now()
+    active_entitlements = Entitlement.objects.filter(
+        user=user,
+        status='ACTIVE'
+    ).filter(
+        Q(access_type='LIFETIME') | Q(access_type='TIME_BOUND', valid_until__gt=now)
+    )
+
+    # 1. Passes
+    passes_qs = Entitlement.objects.filter(
+        user=user,
+        product_type='CLASS_PASS'
+    ).order_by('-valid_until')
+
+    passes = []
+    active_class_ids = set()
+    for p in passes_qs:
+        is_active = p.is_currently_active
+        rem_seconds = 0
+        rem_days = 0
+        if p.valid_until and p.valid_until > now and p.status == 'ACTIVE':
+            rem_seconds = (p.valid_until - now).total_seconds()
+            rem_days = max(0, int(rem_seconds // 86400) + (1 if rem_seconds % 86400 > 0 else 0))
+
+        if is_active:
+            active_class_ids.add(p.scope_id)
+
+        class_obj = ClassLevel.objects.filter(id=p.scope_id).select_related('board').first()
+        passes.append({
+            'id': p.id,
+            'class_id': p.scope_id,
+            'class_name': class_obj.name if class_obj else f"Class {p.scope_id}",
+            'board_name': class_obj.board.name if class_obj and class_obj.board else 'CBSE',
+            'valid_from': p.valid_from.isoformat() if p.valid_from else None,
+            'valid_until': p.valid_until.isoformat() if p.valid_until else None,
+            'is_active': is_active,
+            'status': p.status,
+            'remaining_days': rem_days,
+            'remaining_seconds': int(rem_seconds),
+            'countdown_text': f"{rem_days} days left" if is_active and rem_days > 0 else ("Expires today" if is_active else "Expired"),
+        })
+
+    # 2. Owned chapter IDs and subject IDs
+    direct_chapter_ids = set(active_entitlements.filter(product_type='CHAPTER').values_list('scope_id', flat=True))
+    direct_subject_ids = set(active_entitlements.filter(product_type='SUBJECT').values_list('scope_id', flat=True))
+
+    all_chapters = Chapter.objects.select_related(
+        'subject__academic_class__board'
+    ).prefetch_related('materials').all().order_by(
+        'subject__academic_class__id', 'subject__id', 'chapter_number'
+    )
+
+    owned_chapters = []
+    for ch in all_chapters:
+        unlocked_via = None
+        if ch.id in direct_chapter_ids:
+            unlocked_via = 'CHAPTER'
+        elif ch.subject_id in direct_subject_ids:
+            unlocked_via = 'SUBJECT'
+        elif ch.subject.academic_class_id in active_class_ids:
+            unlocked_via = 'CLASS_PASS'
+        elif ch.is_free_sample:
+            unlocked_via = 'FREE_SAMPLE'
+
+        if unlocked_via:
+            materials_list = []
+            for m in ch.materials.all():
+                materials_list.append({
+                    'id': m.id,
+                    'title': m.title,
+                    'mime_type': m.mime_type,
+                    'file_size_bytes': m.file_size_bytes,
+                    'stream_url': f"/api/v1/materials/{m.id}/stream/",
+                })
+
+            owned_chapters.append({
+                'id': ch.id,
+                'chapter_number': ch.chapter_number,
+                'title': ch.title,
+                'subject_id': ch.subject.id,
+                'subject_name': ch.subject.name,
+                'class_id': ch.subject.academic_class.id,
+                'class_name': ch.subject.academic_class.name,
+                'board_name': ch.subject.academic_class.board.name if ch.subject.academic_class.board else 'CBSE',
+                'is_free_sample': ch.is_free_sample,
+                'unlocked_via': unlocked_via,
+                'materials': materials_list,
+            })
+
+    # 3. Owned Subjects
+    owned_subjects = []
+    if direct_subject_ids:
+        for s in Subject.objects.filter(id__in=direct_subject_ids).select_related('academic_class__board'):
+            owned_subjects.append({
+                'id': s.id,
+                'name': s.name,
+                'class_name': s.academic_class.name,
+                'board_name': s.academic_class.board.name if s.academic_class.board else 'CBSE',
+                'chapters_count': s.chapters.count(),
+            })
+
+    return {
+        'passes': passes,
+        'chapters': owned_chapters,
+        'subjects': owned_subjects,
+        'stats': {
+            'active_passes_count': len([p for p in passes if p['is_active']]),
+            'total_chapters_unlocked': len(owned_chapters),
+            'direct_chapters_count': len(direct_chapter_ids),
+            'direct_subjects_count': len(direct_subject_ids),
+        }
+    }
+
+
+
+def get_student_library_data(user) -> dict:
+    """
+    Returns complete personalized student library hub data:
+    1. Active & historical class passes with live countdown metrics.
+    2. Owned chapters (direct purchase, subject pack unlock, or active class pass unlock).
+    3. Owned subject packs and bundles.
+    4. Attached downloadable/streamable study materials with protected stream URLs.
+    """
+    from django.db.models import Q
+    from apps.catalog.models import Chapter, Subject, ClassLevel
+    from apps.entitlements.models import Entitlement
+
+    now = timezone.now()
+    active_entitlements = Entitlement.objects.filter(
+        user=user,
+        status='ACTIVE'
+    ).filter(
+        Q(access_type='LIFETIME') | Q(access_type='TIME_BOUND', valid_until__gt=now)
+    )
+
+    # 1. Passes
+    passes_qs = Entitlement.objects.filter(
+        user=user,
+        product_type='CLASS_PASS'
+    ).order_by('-valid_until')
+
+    passes = []
+    active_class_ids = set()
+    for p in passes_qs:
+        is_active = p.is_currently_active
+        rem_seconds = 0
+        rem_days = 0
+        if p.valid_until and p.valid_until > now and p.status == 'ACTIVE':
+            rem_seconds = (p.valid_until - now).total_seconds()
+            rem_days = max(0, int(rem_seconds // 86400) + (1 if rem_seconds % 86400 > 0 else 0))
+
+        if is_active:
+            active_class_ids.add(p.scope_id)
+
+        class_obj = ClassLevel.objects.filter(id=p.scope_id).select_related('board').first()
+        passes.append({
+            'id': p.id,
+            'class_id': p.scope_id,
+            'class_name': class_obj.name if class_obj else f"Class {p.scope_id}",
+            'board_name': class_obj.board.name if class_obj and class_obj.board else 'CBSE',
+            'valid_from': p.valid_from.isoformat() if p.valid_from else None,
+            'valid_until': p.valid_until.isoformat() if p.valid_until else None,
+            'is_active': is_active,
+            'status': p.status,
+            'remaining_days': rem_days,
+            'remaining_seconds': int(rem_seconds),
+            'countdown_text': f"{rem_days} days left" if is_active and rem_days > 0 else ("Expires today" if is_active else "Expired"),
+        })
+
+    # 2. Owned chapter IDs and subject IDs
+    direct_chapter_ids = set(active_entitlements.filter(product_type='CHAPTER').values_list('scope_id', flat=True))
+    direct_subject_ids = set(active_entitlements.filter(product_type='SUBJECT').values_list('scope_id', flat=True))
+
+    all_chapters = Chapter.objects.select_related(
+        'subject__academic_class__board'
+    ).prefetch_related('materials').all().order_by(
+        'subject__academic_class__id', 'subject__id', 'chapter_number'
+    )
+
+    owned_chapters = []
+    for ch in all_chapters:
+        unlocked_via = None
+        if ch.id in direct_chapter_ids:
+            unlocked_via = 'CHAPTER'
+        elif ch.subject_id in direct_subject_ids:
+            unlocked_via = 'SUBJECT'
+        elif ch.subject.academic_class_id in active_class_ids:
+            unlocked_via = 'CLASS_PASS'
+        elif ch.is_free_sample:
+            unlocked_via = 'FREE_SAMPLE'
+
+        if unlocked_via:
+            materials_list = []
+            for m in ch.materials.all():
+                materials_list.append({
+                    'id': m.id,
+                    'title': m.title,
+                    'mime_type': m.mime_type,
+                    'file_size_bytes': m.file_size_bytes,
+                    'stream_url': f"/api/v1/materials/{m.id}/stream/",
+                })
+
+            owned_chapters.append({
+                'id': ch.id,
+                'chapter_number': ch.chapter_number,
+                'title': ch.title,
+                'subject_id': ch.subject.id,
+                'subject_name': ch.subject.name,
+                'class_id': ch.subject.academic_class.id,
+                'class_name': ch.subject.academic_class.name,
+                'board_name': ch.subject.academic_class.board.name if ch.subject.academic_class.board else 'CBSE',
+                'is_free_sample': ch.is_free_sample,
+                'unlocked_via': unlocked_via,
+                'materials': materials_list,
+            })
+
+    # 3. Owned Subjects
+    owned_subjects = []
+    if direct_subject_ids:
+        for s in Subject.objects.filter(id__in=direct_subject_ids).select_related('academic_class__board'):
+            owned_subjects.append({
+                'id': s.id,
+                'name': s.name,
+                'class_name': s.academic_class.name,
+                'board_name': s.academic_class.board.name if s.academic_class.board else 'CBSE',
+                'chapters_count': s.chapters.count(),
+            })
+
+    return {
+        'passes': passes,
+        'chapters': owned_chapters,
+        'subjects': owned_subjects,
+        'stats': {
+            'active_passes_count': len([p for p in passes if p['is_active']]),
+            'total_chapters_unlocked': len(owned_chapters),
+            'direct_chapters_count': len(direct_chapter_ids),
+            'direct_subjects_count': len(direct_subject_ids),
+        }
+    }
+
+
+

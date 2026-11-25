@@ -138,3 +138,37 @@ class AdminEntitlementListView(ListAPIView):
         if status_param:
             qs = qs.filter(status=status_param)
         return qs
+
+
+class StudentLibraryView(APIView):
+    """
+    GET /api/v1/entitlements/my-library/
+    Returns personalized student hub data:
+    - Active & historical monthly/annual class passes with live countdown metrics.
+    - All accessible study note chapters (direct purchases, subject pack unlocks, class pass unlocks, and free samples).
+    - Attached study material records with protected PDF streaming URLs.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        from .services import get_student_library_data
+        data = get_student_library_data(request.user)
+        return Response(data, status=status.HTTP_200_OK)
+
+
+
+class StudentLibraryView(APIView):
+    """
+    GET /api/v1/entitlements/my-library/
+    Returns student library dashboard containing:
+    - Active monthly/annual class passes with live countdown metrics.
+    - Owned chapters (purchased individually, via subject pack, or class pass).
+    - Attached PDF study materials ready for authenticated in-browser streaming.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        from .services import get_student_library_data
+        data = get_student_library_data(request.user)
+        return Response(data, status=status.HTTP_200_OK)
+
