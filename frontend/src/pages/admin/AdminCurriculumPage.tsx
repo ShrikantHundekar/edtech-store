@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   X,
   Loader2,
+  UploadCloud,
 } from 'lucide-react';
 import {
   adminCatalogService,
@@ -17,6 +18,7 @@ import {
   type SubjectInput,
   type ChapterInput,
 } from '../../services/adminCatalogService';
+import { PDFUploadModal } from '../../components/admin/PDFUploadModal';
 import type { Board, ClassLevel, Subject, Chapter } from '../../types/catalog';
 
 type TabType = 'BOARDS' | 'CLASSES' | 'SUBJECTS' | 'CHAPTERS';
@@ -38,6 +40,7 @@ export const AdminCurriculumPage: React.FC = () => {
   // Modal States
   const [modalType, setModalType] = useState<'BOARD' | 'CLASS' | 'SUBJECT' | 'CHAPTER' | null>(null);
   const [editingItem, setEditingItem] = useState<Board | ClassLevel | Subject | Chapter | null>(null);
+  const [uploadingChapter, setUploadingChapter] = useState<Chapter | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -250,6 +253,24 @@ export const AdminCurriculumPage: React.FC = () => {
       setFormErrors({ form: msg });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleToggleFreeSample = async (ch: Chapter) => {
+    try {
+      const updated = await adminCatalogService.toggleFreeSample(ch.id);
+      setChapters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      showFeedback(
+        'success',
+        `Free sample flag for "${ch.title}" toggled to ${
+          updated.is_free_sample ? 'FREE SAMPLE' : 'STANDARD'
+        }.`
+      );
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } }).response?.data?.error ||
+        'Failed to toggle free sample.';
+      showFeedback('error', msg);
     }
   };
 
@@ -546,18 +567,31 @@ export const AdminCurriculumPage: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-4 px-6 text-center">
-                          {ch.is_free_sample ? (
-                            <span className="inline-flex items-center px-2 py-0.5 bg-amber-100 text-amber-800 font-black rounded-md text-[10px]">
-                              <Sparkles className="w-3 h-3 mr-0.5" /> FREE SAMPLE
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 font-medium">Standard</span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleFreeSample(ch)}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black tracking-wide transition cursor-pointer ${
+                              ch.is_free_sample
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                            }`}
+                            title="Click to toggle free sample preview status"
+                          >
+                            <Sparkles className={`w-3 h-3 mr-1 ${ch.is_free_sample ? 'text-amber-600' : 'text-slate-400'}`} />
+                            <span>{ch.is_free_sample ? 'FREE SAMPLE' : 'STANDARD'}</span>
+                          </button>
                         </td>
                         <td className="py-4 px-6 text-center font-bold text-slate-700">
                           {ch.materials_count ?? 0} PDF(s)
                         </td>
                         <td className="py-4 px-6 text-right space-x-2">
+                          <button
+                            onClick={() => setUploadingChapter(ch)}
+                            className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                            title="Upload PDF Material"
+                          >
+                            <UploadCloud className="w-4 h-4" />
+                          </button>
                           <button
                             onClick={() => openEditModal(ch, 'CHAPTERS')}
                             className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
@@ -863,6 +897,28 @@ export const AdminCurriculumPage: React.FC = () => {
             )}
           </div>
         </div>
+      )}
+
+      {/* PDF UPLOAD MODAL */}
+      {uploadingChapter && (
+        <PDFUploadModal
+          chapter={uploadingChapter}
+          onClose={() => setUploadingChapter(null)}
+          onSuccess={(mat) => {
+            setChapters((prev) =>
+              prev.map((c) =>
+                c.id === uploadingChapter.id
+                  ? { ...c, materials_count: (c.materials_count || 0) + 1 }
+                  : c
+              )
+            );
+            setUploadingChapter(null);
+            showFeedback(
+              'success',
+              `Successfully uploaded PDF material "${mat.title || 'Note'}" for Chapter "${uploadingChapter.title}"!`
+            );
+          }}
+        />
       )}
     </div>
   );

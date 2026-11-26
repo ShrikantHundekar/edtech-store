@@ -99,4 +99,38 @@ export const adminCatalogService = {
   async deleteChapter(id: number): Promise<void> {
     await api.delete(`/admin/chapters/${id}/`);
   },
+
+  // Chapter PDF Upload & Free Sample Toggle (Issue #46)
+  async uploadChapterPDF(
+    chapterId: number,
+    file: File,
+    title?: string,
+    onProgress?: (percent: number) => void
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (title && title.trim()) {
+      formData.append('title', title.trim());
+    }
+
+    const { data } = await api.post(`/admin/chapters/${chapterId}/upload-material/`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onProgress(percent);
+        }
+      },
+    });
+    return data;
+  },
+
+  async toggleFreeSample(chapterId: number, isFreeSample?: boolean): Promise<Chapter> {
+    const body = isFreeSample !== undefined ? { is_free_sample: isFreeSample } : {};
+    const { data } = await api.post<Chapter>(`/admin/chapters/${chapterId}/toggle-free-sample/`, body);
+    return data;
+  },
 };
+
