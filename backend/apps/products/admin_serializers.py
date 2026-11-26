@@ -58,6 +58,8 @@ class AdminProductSerializer(serializers.ModelSerializer):
     chapter_title = serializers.CharField(source='chapter.title', read_only=True)
     price_paise = serializers.IntegerField(source='current_price_paise', read_only=True)
     price_inr = serializers.FloatField(source='current_price_inr', read_only=True)
+    current_price_paise = serializers.IntegerField(read_only=True)
+    current_price_inr = serializers.FloatField(read_only=True)
     access_duration = serializers.CharField(read_only=True)
     pass_duration_days = serializers.IntegerField(read_only=True)
     inclusions = serializers.SerializerMethodField()
@@ -85,6 +87,8 @@ class AdminProductSerializer(serializers.ModelSerializer):
             'is_active',
             'price_paise',
             'price_inr',
+            'current_price_paise',
+            'current_price_inr',
             'amount_paise',
             'access_duration',
             'pass_duration_days',

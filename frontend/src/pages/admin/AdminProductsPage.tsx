@@ -369,17 +369,18 @@ export const AdminProductsPage: React.FC = () => {
                               <span className="font-black text-slate-900 text-sm">
                                 {p.product_type === 'FREE_SAMPLE'
                                   ? '₹0.00'
-                                  : `₹${(p.current_price_paise / 100).toFixed(2)}`}
+                                  : `₹${((p.current_price_paise ?? p.price_paise ?? 0) / 100).toFixed(2)}`}
                               </span>
                               <span className="text-[11px] text-slate-400 font-mono block">
-                                {p.current_price_paise} paise
+                                {p.current_price_paise ?? p.price_paise ?? 0} paise
                               </span>
                             </div>
                             {p.product_type !== 'FREE_SAMPLE' && (
                               <button
                                 onClick={() => {
+                                  const effectivePaise = p.current_price_paise ?? p.price_paise ?? 0;
                                   setQuickPriceId(p.id);
-                                  setQuickPriceInput((p.current_price_paise / 100).toString());
+                                  setQuickPriceInput((effectivePaise / 100).toString());
                                 }}
                                 title="Quick price update"
                                 className="p-1 text-slate-400 hover:text-indigo-600 rounded hover:bg-indigo-50 transition-colors"

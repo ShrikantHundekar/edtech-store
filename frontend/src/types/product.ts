@@ -58,6 +58,8 @@ export interface Product {
   chapter?: number;
   chapter_title?: string;
   is_active: boolean;
+  price_paise?: number;
+  price_inr?: number;
   current_price_paise: number;
   current_price_inr: number;
   access_duration: string;

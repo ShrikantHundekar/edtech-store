@@ -31,6 +31,8 @@ class ProductSerializer(serializers.ModelSerializer):
 
     price_paise = serializers.IntegerField(source='current_price_paise', read_only=True)
     price_inr = serializers.FloatField(source='current_price_inr', read_only=True)
+    current_price_paise = serializers.IntegerField(read_only=True)
+    current_price_inr = serializers.FloatField(read_only=True)
     access_duration = serializers.CharField(read_only=True)
     pass_duration_days = serializers.IntegerField(read_only=True)
     gst_breakdown = serializers.DictField(read_only=True)
@@ -59,6 +61,8 @@ class ProductSerializer(serializers.ModelSerializer):
             'is_active',
             'price_paise',
             'price_inr',
+            'current_price_paise',
+            'current_price_inr',
             'access_duration',
             'pass_duration_days',
             'gst_breakdown',
