@@ -98,48 +98,66 @@ export const ProfilePage: React.FC = () => {
 
         {/* Quick Shortcuts */}
         <div className="space-y-4">
-          <Link
-            to="/library"
-            className="block p-5 bg-gradient-to-br from-indigo-50 to-white border border-indigo-100 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all group"
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-sm">
-                <BookOpen className="w-5 h-5" />
-              </div>
-              <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
-            </div>
-            <h3 className="mt-4 font-bold text-slate-900">My Library</h3>
-            <p className="text-xs text-slate-600 mt-1">Read your unlocked notes & monitor active class pass timers.</p>
-          </Link>
-
-          <Link
-            to="/orders"
-            className="block p-5 bg-gradient-to-br from-slate-50 to-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center shadow-sm">
-                <Clock className="w-5 h-5" />
-              </div>
-              <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-slate-800 group-hover:translate-x-1 transition-all" />
-            </div>
-            <h3 className="mt-4 font-bold text-slate-900">Order History</h3>
-            <p className="text-xs text-slate-600 mt-1">View past transactions, payment IDs, and printable GST invoices.</p>
-          </Link>
-
-          {isAdmin && (
-            <Link
-              to="/admin/orders"
-              className="block p-5 bg-gradient-to-br from-purple-50 to-white border border-purple-200 rounded-2xl shadow-sm hover:shadow-md hover:border-purple-300 transition-all group"
-            >
-              <div className="flex items-center justify-between">
-                <div className="w-10 h-10 rounded-xl bg-purple-700 text-white flex items-center justify-center shadow-sm">
-                  <Shield className="w-5 h-5" />
+          {!isAdmin ? (
+            <>
+              <Link
+                to="/library"
+                className="block p-5 bg-gradient-to-br from-indigo-50 to-white border border-indigo-100 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-sm">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
                 </div>
-                <ArrowRight className="w-5 h-5 text-purple-400 group-hover:text-purple-700 group-hover:translate-x-1 transition-all" />
-              </div>
-              <h3 className="mt-4 font-bold text-purple-950">Admin Console</h3>
-              <p className="text-xs text-purple-700/80 mt-1">Manage curriculum, uploads, pricing, and view analytics.</p>
-            </Link>
+                <h3 className="mt-4 font-bold text-slate-900">My Library</h3>
+                <p className="text-xs text-slate-600 mt-1">Read your unlocked notes & monitor active class pass timers.</p>
+              </Link>
+
+              <Link
+                to="/orders"
+                className="block p-5 bg-gradient-to-br from-slate-50 to-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center shadow-sm">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-slate-800 group-hover:translate-x-1 transition-all" />
+                </div>
+                <h3 className="mt-4 font-bold text-slate-900">Order History</h3>
+                <p className="text-xs text-slate-600 mt-1">View past transactions, payment IDs, and printable GST invoices.</p>
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link
+                to="/admin/curriculum"
+                className="block p-5 bg-gradient-to-br from-purple-50 to-white border border-purple-200 rounded-2xl shadow-sm hover:shadow-md hover:border-purple-300 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-purple-700 text-white flex items-center justify-center shadow-sm">
+                    <Shield className="w-5 h-5" />
+                  </div>
+                  <ArrowRight className="w-5 h-5 text-purple-400 group-hover:text-purple-700 group-hover:translate-x-1 transition-all" />
+                </div>
+                <h3 className="mt-4 font-bold text-purple-950">Curriculum Console</h3>
+                <p className="text-xs text-purple-700/80 mt-1">Manage boards, classes, subjects, chapters & PDF uploads.</p>
+              </Link>
+
+              <Link
+                to="/admin/products"
+                className="block p-5 bg-gradient-to-br from-indigo-50 to-white border border-indigo-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-300 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-700 text-white flex items-center justify-center shadow-sm">
+                    <Shield className="w-5 h-5" />
+                  </div>
+                  <ArrowRight className="w-5 h-5 text-indigo-400 group-hover:text-indigo-700 group-hover:translate-x-1 transition-all" />
+                </div>
+                <h3 className="mt-4 font-bold text-indigo-950">Products & Pricing</h3>
+                <p className="text-xs text-indigo-700/80 mt-1">Configure passes, subject packs, and commercial rates.</p>
+              </Link>
+            </>
           )}
         </div>
       </div>

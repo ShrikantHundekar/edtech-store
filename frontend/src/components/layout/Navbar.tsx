@@ -39,51 +39,53 @@ export const Navbar: React.FC = () => {
 
           {/* Desktop Navigation Links */}
           <nav className="hidden md:flex items-center space-x-1 lg:space-x-2">
-            <Link
-              to="/"
-              className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
-                isActive('/') ? 'text-indigo-600 bg-indigo-50/70' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              Curriculum Store
-            </Link>
-
-            <Link
-              to="/products"
-              className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
-                isActive('/products') || location.pathname.startsWith('/products/')
-                  ? 'text-indigo-600 bg-indigo-50/70'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              All Products
-            </Link>
-
-            {isAuthenticated && (
+            {!isAdmin ? (
               <>
                 <Link
-                  to="/library"
-                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
-                    isActive('/library') ? 'text-indigo-600 bg-indigo-50/70' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  to="/"
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                    isActive('/') ? 'text-indigo-600 bg-indigo-50/70' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
-                  <BookOpen className="w-4 h-4 text-indigo-500" />
-                  <span>My Library</span>
+                  Curriculum Store
                 </Link>
 
                 <Link
-                  to="/orders"
-                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
-                    isActive('/orders') ? 'text-indigo-600 bg-indigo-50/70' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  to="/products"
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                    isActive('/products') || location.pathname.startsWith('/products/')
+                      ? 'text-indigo-600 bg-indigo-50/70'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
-                  <Clock className="w-4 h-4 text-slate-400" />
-                  <span>Orders</span>
+                  All Products
                 </Link>
-              </>
-            )}
 
-            {isAdmin && (
+                {isAuthenticated && (
+                  <>
+                    <Link
+                      to="/library"
+                      className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
+                        isActive('/library') ? 'text-indigo-600 bg-indigo-50/70' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <BookOpen className="w-4 h-4 text-indigo-500" />
+                      <span>My Library</span>
+                    </Link>
+
+                    <Link
+                      to="/orders"
+                      className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
+                        isActive('/orders') ? 'text-indigo-600 bg-indigo-50/70' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Clock className="w-4 h-4 text-slate-400" />
+                      <span>Orders</span>
+                    </Link>
+                  </>
+                )}
+              </>
+            ) : (
               <>
                 <Link
                   to="/admin/curriculum"
@@ -94,7 +96,7 @@ export const Navbar: React.FC = () => {
                   }`}
                 >
                   <Shield className="w-4 h-4 text-purple-600" />
-                  <span>Curriculum</span>
+                  <span>Curriculum Tree</span>
                 </Link>
                 <Link
                   to="/admin/products"
@@ -105,7 +107,17 @@ export const Navbar: React.FC = () => {
                   }`}
                 >
                   <Tag className="w-4 h-4 text-purple-600" />
-                  <span>Products</span>
+                  <span>Products & Pricing</span>
+                </Link>
+                <Link
+                  to="/products"
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                    isActive('/products') || location.pathname.startsWith('/products/')
+                      ? 'text-slate-900 bg-slate-100 font-bold'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  Store Catalog Preview
                 </Link>
               </>
             )}
@@ -113,18 +125,20 @@ export const Navbar: React.FC = () => {
 
           {/* Right Action Icons & Auth */}
           <div className="hidden md:flex items-center space-x-3">
-            <Link
-              to="/cart"
-              className="p-2.5 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-slate-50 transition-colors relative"
-              title="Shopping Cart"
-            >
-              <ShoppingCart className="w-5 h-5" />
-              {itemCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-600 text-white rounded-full text-[10px] font-black flex items-center justify-center shadow-xs animate-in zoom-in-50">
-                  {itemCount > 9 ? '9+' : itemCount}
-                </span>
-              )}
-            </Link>
+            {!isAdmin && (
+              <Link
+                to="/cart"
+                className="p-2.5 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-slate-50 transition-colors relative"
+                title="Shopping Cart"
+              >
+                <ShoppingCart className="w-5 h-5" />
+                {itemCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-600 text-white rounded-full text-[10px] font-black flex items-center justify-center shadow-xs animate-in zoom-in-50">
+                    {itemCount > 9 ? '9+' : itemCount}
+                  </span>
+                )}
+              </Link>
+            )}
 
             {isAuthenticated && user ? (
               <div className="flex items-center space-x-3 pl-2 border-l border-slate-200">
@@ -173,14 +187,16 @@ export const Navbar: React.FC = () => {
 
           {/* Mobile menu toggle button */}
           <div className="flex md:hidden items-center space-x-2">
-            <Link to="/cart" className="p-2 text-slate-600 hover:text-indigo-600 relative">
-              <ShoppingCart className="w-5 h-5" />
-              {itemCount > 0 && (
-                <span className="absolute top-0 right-0 w-4 h-4 bg-indigo-600 text-white rounded-full text-[9px] font-black flex items-center justify-center">
-                  {itemCount}
-                </span>
-              )}
-            </Link>
+            {!isAdmin && (
+              <Link to="/cart" className="p-2 text-slate-600 hover:text-indigo-600 relative">
+                <ShoppingCart className="w-5 h-5" />
+                {itemCount > 0 && (
+                  <span className="absolute top-0 right-0 w-4 h-4 bg-indigo-600 text-white rounded-full text-[9px] font-black flex items-center justify-center">
+                    {itemCount}
+                  </span>
+                )}
+              </Link>
+            )}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
@@ -194,52 +210,74 @@ export const Navbar: React.FC = () => {
       {/* Mobile Drawer */}
       {mobileMenuOpen && (
         <div className="md:hidden border-t border-slate-200 bg-white px-4 pt-3 pb-6 space-y-2">
-          <Link
-            to="/"
-            onClick={() => setMobileMenuOpen(false)}
-            className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
-          >
-            Curriculum Store
-          </Link>
-          <Link
-            to="/products"
-            onClick={() => setMobileMenuOpen(false)}
-            className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
-          >
-            All Products
-          </Link>
-          {isAuthenticated && (
+          {!isAdmin ? (
             <>
               <Link
-                to="/library"
+                to="/"
                 onClick={() => setMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
               >
-                My Library
+                Curriculum Store
               </Link>
               <Link
-                to="/orders"
+                to="/products"
                 onClick={() => setMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
               >
-                Order History
+                All Products
+              </Link>
+              {isAuthenticated && (
+                <>
+                  <Link
+                    to="/library"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                  >
+                    My Library
+                  </Link>
+                  <Link
+                    to="/orders"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                  >
+                    Order History
+                  </Link>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <Link
+                to="/admin/curriculum"
+                onClick={() => setMobileMenuOpen(false)}
+                className="block px-3 py-2 rounded-lg text-sm font-semibold text-purple-700 bg-purple-50"
+              >
+                Curriculum Tree
               </Link>
               <Link
-                to="/profile"
+                to="/admin/products"
+                onClick={() => setMobileMenuOpen(false)}
+                className="block px-3 py-2 rounded-lg text-sm font-semibold text-purple-700 bg-purple-50"
+              >
+                Products & Pricing
+              </Link>
+              <Link
+                to="/products"
                 onClick={() => setMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
               >
-                My Profile
+                Store Catalog Preview
               </Link>
             </>
           )}
-          {isAdmin && (
+
+          {isAuthenticated && (
             <Link
-              to="/admin/curriculum"
+              to="/profile"
               onClick={() => setMobileMenuOpen(false)}
-              className="block px-3 py-2 rounded-lg text-sm font-semibold text-purple-700 bg-purple-50"
+              className="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-800 hover:bg-slate-50"
             >
-              Admin Console
+              My Profile
             </Link>
           )}
 
