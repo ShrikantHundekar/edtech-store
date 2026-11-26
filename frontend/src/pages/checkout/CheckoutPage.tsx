@@ -18,6 +18,7 @@ import {
 import { useCart } from '../../context/CartContext';
 import { useAuth } from '../../context/AuthContext';
 import { paymentService } from '../../services/paymentService';
+import { SimulatedPaymentModal } from '../../components/checkout/SimulatedPaymentModal';
 import type { PaymentVerifyPayload, PaymentVerifyResponse, RazorpayResponse } from '../../types/payment';
 
 export const CheckoutPage: React.FC = () => {
@@ -29,6 +30,11 @@ export const CheckoutPage: React.FC = () => {
   const [errorAlert, setErrorAlert] = useState<string | null>(null);
   const [successData, setSuccessData] = useState<PaymentVerifyResponse | null>(null);
   const [redirectCountdown, setRedirectCountdown] = useState<number>(3);
+  const [activeSimulationOrder, setActiveSimulationOrder] = useState<{
+    orderId: string;
+    orderNumber: string;
+    amountInr: number;
+  } | null>(null);
 
   // Auto-redirect to My Library upon success
   useEffect(() => {
@@ -98,15 +104,31 @@ export const CheckoutPage: React.FC = () => {
         return;
       }
 
-      // 3. Ensure Razorpay SDK is loaded
-      const sdkReady = await paymentService.loadRazorpaySDK();
-      if (!sdkReady || !window.Razorpay) {
-        setErrorAlert('Could not load Razorpay SDK. Please check your internet connection or use Test Simulation below.');
+      // 3. If running with test placeholder keys or simulation mode, open the interactive simulator directly
+      if (!order.razorpay_key_id || order.razorpay_key_id.includes('placeholder')) {
+        setActiveSimulationOrder({
+          orderId: order.razorpay_order_id || '',
+          orderNumber: order.order_number,
+          amountInr: order.amount_paise / 100,
+        });
         setIsProcessing(false);
         return;
       }
 
-      // 4. Open Razorpay Checkout Modal
+      // 4. Ensure Razorpay SDK is loaded
+      const sdkReady = await paymentService.loadRazorpaySDK();
+      if (!sdkReady || !window.Razorpay) {
+        // Fallback to simulation modal if external SDK script fails or is blocked
+        setActiveSimulationOrder({
+          orderId: order.razorpay_order_id || '',
+          orderNumber: order.order_number,
+          amountInr: order.amount_paise / 100,
+        });
+        setIsProcessing(false);
+        return;
+      }
+
+      // 5. Open Razorpay Checkout Modal
       paymentService.openRazorpayModal({
         key: order.razorpay_key_id,
         amount: order.amount_paise,
@@ -477,6 +499,33 @@ export const CheckoutPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Interactive Simulation Modal for Local Test/Dev Environments */}
+      {activeSimulationOrder && (
+        <SimulatedPaymentModal
+          isOpen={Boolean(activeSimulationOrder)}
+          onClose={() => setActiveSimulationOrder(null)}
+          orderNumber={activeSimulationOrder.orderNumber}
+          amountInr={activeSimulationOrder.amountInr}
+          onSelectMethod={async (method, fail) => {
+            if (fail) {
+              try {
+                await paymentService.simulatePayment(activeSimulationOrder.orderId, method, true);
+              } catch (simErr: unknown) {
+                const msg = simErr instanceof Error ? simErr.message : 'Payment was declined by issuing bank.';
+                setErrorAlert(msg);
+              }
+              return;
+            }
+            const simPayload = await paymentService.simulatePayment(
+              activeSimulationOrder.orderId,
+              method,
+              false
+            );
+            await handleVerifyPayment(simPayload);
+          }}
+        />
+      )}
     </div>
   );
 };
