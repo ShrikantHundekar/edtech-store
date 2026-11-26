@@ -10,6 +10,7 @@ import { CartPage } from './pages/cart/CartPage';
 import { CheckoutPage } from './pages/checkout/CheckoutPage';
 import { LibraryPage } from './pages/library/LibraryPage';
 import { OrderHistoryPage } from './pages/orders/OrderHistoryPage';
+import { AdminCurriculumPage } from './pages/admin/AdminCurriculumPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { ProfilePage } from './pages/auth/ProfilePage';
@@ -63,6 +64,16 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute>
                       <ProfilePage />
+                    </ProtectedRoute>
+                  }
+                />
+
+                {/* Admin Management Console Routes */}
+                <Route
+                  path="/admin/curriculum"
+                  element={
+                    <ProtectedRoute requireAdmin={true}>
+                      <AdminCurriculumPage />
                     </ProtectedRoute>
                   }
                 />
