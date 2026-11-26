@@ -17,6 +17,7 @@ import {
 import { productService } from '../../services/productService';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
+import { Edit2, Shield } from 'lucide-react';
 import type {
   Product,
   ProductOwnershipResponse,
@@ -27,7 +28,7 @@ import type {
 export const ProductDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isAdmin } = useAuth();
   const { addToCart } = useCart();
 
   const [product, setProduct] = useState<Product | null>(null);
@@ -305,73 +306,98 @@ export const ProductDetailPage: React.FC = () => {
 
             {/* Dynamic Action Buttons */}
             <div className="mt-6 space-y-3">
-              {purchaseState === 'BUY' && (
-                <>
-                  <button
-                    onClick={handleBuyNow}
-                    className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-sm shadow-indigo-200 hover:shadow-indigo-300 transition-all flex items-center justify-center space-x-2 cursor-pointer"
-                  >
-                    <span>Buy Now • ₹{effectivePriceInr.toFixed(2)}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleAddToCart}
-                    className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-2xl transition cursor-pointer"
-                  >
-                    Add to Cart
-                  </button>
-                </>
-              )}
-
-              {purchaseState === 'UPGRADE' && (
-                <>
-                  <button
-                    onClick={handleBuyNow}
-                    className="w-full py-3.5 px-4 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-2xl shadow-sm shadow-amber-200 transition-all flex items-center justify-center space-x-2 cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    <span>Upgrade Now • ₹{effectivePriceInr.toFixed(2)}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleAddToCart}
-                    className="w-full py-3 px-4 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold rounded-2xl transition cursor-pointer"
-                  >
-                    Add to Cart (Upgrade)
-                  </button>
-                </>
-              )}
-
-              {purchaseState === 'OWNED' && (
+              {isAdmin ? (
                 <div className="space-y-3">
-                  <div className="w-full py-3.5 px-4 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold rounded-2xl flex items-center justify-center space-x-2">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    <span>Already in Your Collection ✓</span>
+                  <div className="p-3.5 bg-purple-50 border border-purple-200 rounded-2xl flex items-center space-x-2.5 text-xs text-purple-900 font-semibold">
+                    <Shield className="w-4 h-4 text-purple-600 shrink-0" />
+                    <span>Administrator View • Product Management</span>
                   </div>
                   <Link
-                    to="/library"
-                    className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
-                  >
-                    <BookOpen className="w-4 h-4" />
-                    <span>Open in My Library</span>
-                  </Link>
-                </div>
-              )}
-
-              {purchaseState === 'UNLOCKED_VIA_PASS' && (
-                <div className="space-y-3">
-                  <div className="w-full py-3.5 px-4 bg-purple-50 border border-purple-200 text-purple-900 font-bold rounded-2xl flex items-center justify-center space-x-2">
-                    <Lock className="w-4 h-4 text-purple-600" />
-                    <span>Unlocked with Active Pass 🔓</span>
-                  </div>
-                  <Link
-                    to="/library"
+                    to="/admin/products"
                     className="w-full py-3.5 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
                   >
-                    <ExternalLink className="w-4 h-4" />
-                    <span>Read in Library</span>
+                    <Edit2 className="w-4 h-4" />
+                    <span>Manage & Edit in Admin Panel</span>
+                  </Link>
+                  <Link
+                    to="/library"
+                    className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-2xl transition flex items-center justify-center space-x-2 text-sm"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    <span>Preview in Content Library</span>
                   </Link>
                 </div>
+              ) : (
+                <>
+                  {purchaseState === 'BUY' && (
+                    <>
+                      <button
+                        onClick={handleBuyNow}
+                        className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-sm shadow-indigo-200 hover:shadow-indigo-300 transition-all flex items-center justify-center space-x-2 cursor-pointer"
+                      >
+                        <span>Buy Now • ₹{effectivePriceInr.toFixed(2)}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={handleAddToCart}
+                        className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-2xl transition cursor-pointer"
+                      >
+                        Add to Cart
+                      </button>
+                    </>
+                  )}
+
+                  {purchaseState === 'UPGRADE' && (
+                    <>
+                      <button
+                        onClick={handleBuyNow}
+                        className="w-full py-3.5 px-4 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-2xl shadow-sm shadow-amber-200 transition-all flex items-center justify-center space-x-2 cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>Upgrade Now • ₹{effectivePriceInr.toFixed(2)}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={handleAddToCart}
+                        className="w-full py-3 px-4 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold rounded-2xl transition cursor-pointer"
+                      >
+                        Add to Cart (Upgrade)
+                      </button>
+                    </>
+                  )}
+
+                  {purchaseState === 'OWNED' && (
+                    <div className="space-y-3">
+                      <div className="w-full py-3.5 px-4 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold rounded-2xl flex items-center justify-center space-x-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <span>Already in Your Collection ✓</span>
+                      </div>
+                      <Link
+                        to="/library"
+                        className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
+                      >
+                        <BookOpen className="w-4 h-4" />
+                        <span>Open in My Library</span>
+                      </Link>
+                    </div>
+                  )}
+
+                  {purchaseState === 'UNLOCKED_VIA_PASS' && (
+                    <div className="space-y-3">
+                      <div className="w-full py-3.5 px-4 bg-purple-50 border border-purple-200 text-purple-900 font-bold rounded-2xl flex items-center justify-center space-x-2">
+                        <Lock className="w-4 h-4 text-purple-600" />
+                        <span>Unlocked with Active Pass 🔓</span>
+                      </div>
+                      <Link
+                        to="/library"
+                        className="w-full py-3.5 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        <span>Read in Library</span>
+                      </Link>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
