@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
-import { BookOpen, ShoppingCart, LogOut, Menu, X, Shield, Clock } from 'lucide-react';
+import { BookOpen, ShoppingCart, LogOut, Menu, X, Shield, Clock, Tag } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
@@ -84,17 +84,30 @@ export const Navbar: React.FC = () => {
             )}
 
             {isAdmin && (
-              <Link
-                to="/admin/curriculum"
-                className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
-                  location.pathname.startsWith('/admin')
-                    ? 'text-purple-700 bg-purple-50'
-                    : 'text-purple-600 hover:text-purple-700 hover:bg-purple-50/50'
-                }`}
-              >
-                <Shield className="w-4 h-4 text-purple-600" />
-                <span>Admin Console</span>
-              </Link>
+              <>
+                <Link
+                  to="/admin/curriculum"
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
+                    isActive('/admin/curriculum')
+                      ? 'text-purple-700 bg-purple-50'
+                      : 'text-purple-600 hover:text-purple-700 hover:bg-purple-50/50'
+                  }`}
+                >
+                  <Shield className="w-4 h-4 text-purple-600" />
+                  <span>Curriculum</span>
+                </Link>
+                <Link
+                  to="/admin/products"
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
+                    isActive('/admin/products')
+                      ? 'text-purple-700 bg-purple-50'
+                      : 'text-purple-600 hover:text-purple-700 hover:bg-purple-50/50'
+                  }`}
+                >
+                  <Tag className="w-4 h-4 text-purple-600" />
+                  <span>Products</span>
+                </Link>
+              </>
             )}
           </nav>
 
