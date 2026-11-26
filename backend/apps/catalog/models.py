@@ -161,3 +161,39 @@ class Material(models.Model):
     def __str__(self):
         return f"{self.chapter.title} - {self.title}"
 
+
+class PromoBanner(models.Model):
+    """
+    Custom promotional hero banners displayed across catalog scopes (e.g. Class, Board, or Global).
+    Administrators can create, edit, toggle visibility, and customize title, description, badge, and CTA buttons.
+    """
+    title = models.CharField(max_length=255, help_text="Headline text for the banner")
+    badge_text = models.CharField(max_length=100, default="⚡ Best Value: Full Class Pass", help_text="Pill badge label")
+    description = models.TextField(help_text="Body description detailing inclusions or promotional pitch")
+    academic_class = models.ForeignKey(
+        ClassLevel,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='promo_banners',
+        help_text="Associated class (optional: leaves banner as global if blank)"
+    )
+    monthly_pass_text = models.CharField(max_length=100, default="Monthly Pass (₹299 / 30 Days)")
+    annual_pass_text = models.CharField(max_length=100, default="Annual Pass (₹2,499 / 365 Days)")
+    monthly_pass_url = models.CharField(max_length=255, blank=True, null=True)
+    annual_pass_url = models.CharField(max_length=255, blank=True, null=True)
+    gradient_theme = models.CharField(max_length=100, default="from-indigo-900 via-indigo-800 to-purple-900")
+    is_active = models.BooleanField(default=True, help_text="Controls banner display in store")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'promo_banners'
+        ordering = ['-created_at']
+        verbose_name = 'Promotional Banner'
+        verbose_name_plural = 'Promotional Banners'
+
+    def __str__(self):
+        return f"Banner: {self.title} ({'Active' if self.is_active else 'Disabled'})"
+
+

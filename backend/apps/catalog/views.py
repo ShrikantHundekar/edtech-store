@@ -428,3 +428,39 @@ class MaterialStreamView(APIView):
         response['X-Content-Type-Options'] = 'nosniff'
         return response
 
+
+# =====================================================================
+# PROMOTIONAL BANNER ENDPOINTS (Admin CRUD + Public Active Fetch)
+# =====================================================================
+
+class AdminPromoBannerViewSet(viewsets.ModelViewSet):
+    """
+    Admin ViewSet for managing promotional hero banners.
+    Allows administrators to create, update, delete, and toggle banners.
+    """
+    from .models import PromoBanner
+    from .serializers import PromoBannerSerializer
+    queryset = PromoBanner.objects.select_related('academic_class__board').all().order_by('-created_at')
+    serializer_class = PromoBannerSerializer
+    permission_classes = [IsAdminRole]
+
+
+class PublicPromoBannerListView(generics.ListAPIView):
+    """
+    GET /api/v1/catalog/banners/
+    Returns active promotional banners, optionally filtered by ?class_id=...
+    """
+    from .models import PromoBanner
+    from .serializers import PromoBannerSerializer
+    serializer_class = PromoBannerSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        from .models import PromoBanner
+        qs = PromoBanner.objects.filter(is_active=True).select_related('academic_class__board')
+        class_id = self.request.query_params.get('class_id')
+        if class_id:
+            qs = qs.filter(Q(academic_class_id=class_id) | Q(academic_class__isnull=True))
+        return qs.order_by('-created_at')
+
+

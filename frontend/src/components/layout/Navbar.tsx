@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
-import { BookOpen, ShoppingCart, LogOut, Menu, X, Shield, Clock, Tag } from 'lucide-react';
+import { BookOpen, ShoppingCart, LogOut, Menu, X, Shield, Clock, Tag, Sparkles } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
@@ -108,6 +108,17 @@ export const Navbar: React.FC = () => {
                 >
                   <Tag className="w-4 h-4 text-purple-600" />
                   <span>Products & Pricing</span>
+                </Link>
+                <Link
+                  to="/admin/banners"
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center space-x-1.5 ${
+                    isActive('/admin/banners')
+                      ? 'text-purple-700 bg-purple-50'
+                      : 'text-purple-600 hover:text-purple-700 hover:bg-purple-50/50'
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <span>Hero Banners</span>
                 </Link>
                 <Link
                   to="/products"

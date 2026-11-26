@@ -136,3 +136,30 @@ class MaterialSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ('id', 'created_at', 'updated_at', 'file_size_bytes', 'mime_type')
 
+
+class PromoBannerSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source='academic_class.name', read_only=True)
+    board_name = serializers.CharField(source='academic_class.board.name', read_only=True)
+
+    class Meta:
+        from .models import PromoBanner
+        model = PromoBanner
+        fields = (
+            'id',
+            'title',
+            'badge_text',
+            'description',
+            'academic_class',
+            'class_name',
+            'board_name',
+            'monthly_pass_text',
+            'annual_pass_text',
+            'monthly_pass_url',
+            'annual_pass_url',
+            'gradient_theme',
+            'is_active',
+            'created_at',
+            'updated_at',
+        )
+
+

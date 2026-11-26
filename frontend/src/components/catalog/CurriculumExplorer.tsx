@@ -18,6 +18,8 @@ import {
   Lock,
   Loader2,
 } from 'lucide-react';
+import { bannerService } from '../../services/bannerService';
+import type { PromoBanner } from '../../types/banner';
 
 interface CurriculumExplorerProps {
   initialSubjectId?: number;
@@ -46,6 +48,9 @@ export const CurriculumExplorer: React.FC<CurriculumExplorerProps> = ({
   const [loadingClasses, setLoadingClasses] = useState(false);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [loadingChapters, setLoadingChapters] = useState(false);
+
+  // Active Promotional Banners
+  const [activeBanners, setActiveBanners] = useState<PromoBanner[]>([]);
 
   // Initial load: Fetch Boards
   useEffect(() => {
@@ -127,6 +132,18 @@ export const CurriculumExplorer: React.FC<CurriculumExplorerProps> = ({
     };
     fetchSubjects();
   }, [selectedClass, initialSubjectId]);
+
+  // Load active promotional banners for current class or global
+  useEffect(() => {
+    if (!selectedClass) {
+      setActiveBanners([]);
+      return;
+    }
+    bannerService
+      .getActiveBanners(selectedClass.id)
+      .then((data) => setActiveBanners(data))
+      .catch(() => setActiveBanners([]));
+  }, [selectedClass]);
 
   // When selectedSubject changes, fetch its Chapters
   useEffect(() => {
@@ -233,40 +250,58 @@ export const CurriculumExplorer: React.FC<CurriculumExplorerProps> = ({
         </div>
       </div>
 
-      {/* Class Pass Hero Banner */}
-      {selectedClass && !selectedSubject && (
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-indigo-900 via-indigo-800 to-purple-900 p-8 text-white shadow-xl">
-          <div className="relative z-10 max-w-2xl">
-            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-400 text-amber-950 mb-3 shadow-xs">
-              ⚡ Best Value: Full Class Pass
-            </span>
-            <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
-              Unlock All {selectedClass.name} Subjects & Chapters
-            </h2>
-            <p className="mt-2 text-sm text-indigo-100 leading-relaxed">
-              Get unlimited 24/7 access to all Maths, Science, and Social Science notes for{' '}
-              {selectedClass.name}. Choose between flexible Monthly and Annual passes with instant access.
-            </p>
+      {/* Dynamic Class Pass Hero Banners (Configured by Administrator) */}
+      {selectedClass && !selectedSubject && activeBanners.length > 0 && (
+        <div className="space-y-4">
+          {activeBanners.map((banner) => (
+            <div
+              key={banner.id}
+              className={`relative overflow-hidden rounded-3xl bg-gradient-to-r ${banner.gradient_theme || 'from-indigo-900 via-indigo-800 to-purple-900'} p-8 text-white shadow-xl`}
+            >
+              <div className="relative z-10 max-w-2xl">
+                {banner.badge_text && (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-400 text-amber-950 mb-3 shadow-xs">
+                    {banner.badge_text}
+                  </span>
+                )}
+                <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{banner.title}</h2>
+                <p className="mt-2 text-sm text-indigo-100 leading-relaxed">{banner.description}</p>
 
-            <div className="mt-6 flex flex-wrap gap-4">
-              <button
-                type="button"
-                onClick={() => navigate(`/products?class_id=${selectedClass.id}&type=MONTHLY_PASS`)}
-                className="px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-bold text-sm shadow-md hover:bg-indigo-50 transition-all flex items-center gap-2 cursor-pointer"
-              >
-                <Calendar className="w-4 h-4 text-indigo-600" />
-                <span>Monthly Pass (₹299 / 30 Days)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate(`/products?class_id=${selectedClass.id}&type=ANNUAL_PASS`)}
-                className="px-5 py-2.5 rounded-xl bg-amber-400 text-amber-950 font-bold text-sm shadow-md hover:bg-amber-300 transition-all flex items-center gap-2 cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4 text-amber-900" />
-                <span>Annual Pass (₹2,499 / 365 Days)</span>
-              </button>
+                <div className="mt-6 flex flex-wrap gap-4">
+                  {banner.monthly_pass_text && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(
+                          banner.monthly_pass_url ||
+                            `/products?class_id=${selectedClass.id}&type=MONTHLY_PASS`
+                        )
+                      }
+                      className="px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-bold text-sm shadow-md hover:bg-indigo-50 transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <Calendar className="w-4 h-4 text-indigo-600" />
+                      <span>{banner.monthly_pass_text}</span>
+                    </button>
+                  )}
+                  {banner.annual_pass_text && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(
+                          banner.annual_pass_url ||
+                            `/products?class_id=${selectedClass.id}&type=ANNUAL_PASS`
+                        )
+                      }
+                      className="px-5 py-2.5 rounded-xl bg-amber-400 text-amber-950 font-bold text-sm shadow-md hover:bg-amber-300 transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-900" />
+                      <span>{banner.annual_pass_text}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
+          ))}
         </div>
       )}
 

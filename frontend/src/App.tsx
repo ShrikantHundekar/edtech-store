@@ -12,6 +12,7 @@ import { LibraryPage } from './pages/library/LibraryPage';
 import { OrderHistoryPage } from './pages/orders/OrderHistoryPage';
 import { AdminCurriculumPage } from './pages/admin/AdminCurriculumPage';
 import { AdminProductsPage } from './pages/admin/AdminProductsPage';
+import { AdminBannersPage } from './pages/admin/AdminBannersPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { ProfilePage } from './pages/auth/ProfilePage';
@@ -83,6 +84,14 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute requireAdmin={true}>
                       <AdminProductsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/banners"
+                  element={
+                    <ProtectedRoute requireAdmin={true}>
+                      <AdminBannersPage />
                     </ProtectedRoute>
                   }
                 />
