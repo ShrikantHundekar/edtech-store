@@ -39,10 +39,32 @@ class OrderSerializer(serializers.ModelSerializer):
     amount_paise = serializers.IntegerField(source='net_payable_paise', read_only=True)
     currency = serializers.CharField(default='INR', read_only=True)
     razorpay_key_id = serializers.SerializerMethodField()
+    razorpay_payment_id = serializers.SerializerMethodField()
+    payment_method = serializers.SerializerMethodField()
+    customer_name = serializers.CharField(source='user.full_name', read_only=True)
+    customer_email = serializers.EmailField(source='user.email', read_only=True)
+    gst_breakdown = serializers.SerializerMethodField()
 
     def get_razorpay_key_id(self, obj):
         # Return Razorpay key for frontend Checkout modal integration
         return getattr(settings, 'RAZORPAY_KEY_ID', '')
+
+    def get_razorpay_payment_id(self, obj):
+        # Return latest captured payment ID
+        payment = obj.payments.filter(status='CAPTURED').first()
+        if not payment:
+            payment = obj.payments.order_by('-created_at').first()
+        return payment.razorpay_payment_id if payment else None
+
+    def get_payment_method(self, obj):
+        payment = obj.payments.filter(status='CAPTURED').first()
+        if not payment:
+            payment = obj.payments.order_by('-created_at').first()
+        return payment.payment_method if payment else None
+
+    def get_gst_breakdown(self, obj):
+        from .gst import calculate_gst_breakdown
+        return calculate_gst_breakdown(obj.net_payable_paise)
 
     class Meta:
         model = Order
@@ -50,6 +72,8 @@ class OrderSerializer(serializers.ModelSerializer):
             'id',
             'order_number',
             'user',
+            'customer_name',
+            'customer_email',
             'status',
             'gross_amount_paise',
             'gross_amount_inr',
@@ -69,6 +93,9 @@ class OrderSerializer(serializers.ModelSerializer):
             'currency',
             'razorpay_order_id',
             'razorpay_key_id',
+            'razorpay_payment_id',
+            'payment_method',
+            'gst_breakdown',
             'items',
             'created_at',
             'updated_at',

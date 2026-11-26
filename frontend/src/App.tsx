@@ -9,6 +9,7 @@ import { ProductDetailPage } from './pages/products/ProductDetailPage';
 import { CartPage } from './pages/cart/CartPage';
 import { CheckoutPage } from './pages/checkout/CheckoutPage';
 import { LibraryPage } from './pages/library/LibraryPage';
+import { OrderHistoryPage } from './pages/orders/OrderHistoryPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { ProfilePage } from './pages/auth/ProfilePage';
@@ -46,6 +47,14 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute>
                       <CheckoutPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/orders"
+                  element={
+                    <ProtectedRoute>
+                      <OrderHistoryPage />
                     </ProtectedRoute>
                   }
                 />
